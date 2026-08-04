@@ -81,9 +81,8 @@ FromAresInclude=1
 ## 状态
 
 - ✅ 设计已定（DEVELOPMENT.md v0.2）
-- ✅ 工程文件齐备，CI 可编译（基于 yrpp-spawner 模板，首次 push 由 CI 验证）
-- ⬜ **未经实际编译验证**——本机无编译环境，正确性以第一次 CI 运行为准
-- ⬜ 阶段 0 出口：跑出那行探针日志
+- ✅ 工程文件齐备，**CI 编译通过**（run 30867986599，artifact 含 `ra2hook.dll`）
+- ⬜ 阶段 0 出口：把 dll 放进 RA2 目录，跑出那行探针日志
 - ⬜ 阶段 2：探针为真后写 `MergeFile`（逐键 `WriteString`，后写胜出）
 
-**下一步就是：建仓 → 加 YRpp submodule → push → 看 CI 是否绿。** 红了就按报错调工程文件，这正是纯 CI 方案的验证方式。
+**下一步：从 Actions 页下载 artifact → 放进 RA2 目录 → Syringe 启动 → 看 `ra2hook.log` 里的探针行。**
