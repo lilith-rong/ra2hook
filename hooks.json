@@ -1,0 +1,109 @@
+{
+  "schema": "ra2hook.hooks/v1",
+  "描述": "候选 hook 点清单。地址按'引擎函数'定位，每个点对每个 exe 版本单独记地址（支持魔改 exe 例外）。DLL 启动时读本文件决定挂哪些点；换点/避让冲突靠改本文件，不重编译。",
+  "重要": "所有 address 字段当前为 null，表示未核实。禁止在未对目标 exe 核实前当作可用地址。核实途径：对 gamemd.exe 做 IDA 逆向，或读社区 YRpp 命名地址库。",
+
+  "coldness_说明": {
+    "HIGH": "Ares/Phobos 生态几乎从不 hook，优先用",
+    "MEDIUM": "偶尔被碰，需按版本确认",
+    "LOW": "Ares/Phobos 常占用，仅在确认未被占时用"
+  },
+
+  "targetExecutables": {
+    "YR-1.001-EN-标准": {
+      "说明": "Ares/Phobos 官方锁定的标准 gamemd.exe，MO 等多数 mod 共用",
+      "size": null,
+      "md5": null,
+      "verified": false
+    }
+  },
+
+  "hooks": [
+    {
+      "id": "config-init-once",
+      "engineFunction": "待定（进程/游戏一次性初始化点）",
+      "用途": "DLL 加载后一次性：读取本插件配置、准备 dump 输出目录、打开日志",
+      "timing": "游戏启动早期，仅一次",
+      "hookType": "prologue 追加，不改控制流",
+      "coldness": "HIGH",
+      "aresPhobosConflict": "很低",
+      "address": { "YR-1.001-EN-标准": null },
+      "enabled": false,
+      "status": "candidate-needs-verification",
+      "备注": "选一个只跑一次、无人争抢的良性初始化点即可"
+    },
+    {
+      "id": "rules-append-ini",
+      "engineFunction": "RulesClass::Process 的调用点（caller site），而非 Process 本身",
+      "用途": "【第一部分核心】在所有插件合并完 rules 后、类型解析前，把指定 ini 并进内存的 CCINIClass；同时拷一份 ini 副本留作 dump",
+      "timing": "rules 合并完成后、Process 解析成 TypeClass 前，仅一次",
+      "hookType": "prologue 追加（在 Process 前把内容写进传入的 CCINIClass）",
+      "coldness": "MEDIUM",
+      "aresPhobosConflict": "Process 本体被 Ares/Phobos 重度 hook；选它的调用点可显著降低冲突。仍需按版本确认",
+      "address": { "YR-1.001-EN-标准": null },
+      "enabled": false,
+      "status": "candidate-needs-verification",
+      "备注": "首选'调用点前追加'；若调用点也被占，备用方案是解析后按字段直写 TypeClass（需字段映射表）"
+    },
+    {
+      "id": "rules-append-ini-backup",
+      "engineFunction": "CCINIClass rules 加载/合并相关函数（备用点）",
+      "用途": "与 rules-append-ini 同目的的备用点，供主点被占时切换",
+      "timing": "同上",
+      "hookType": "prologue 追加",
+      "coldness": "MEDIUM",
+      "aresPhobosConflict": "Phobos 自定义 INI 功能可能占用此区域，需确认",
+      "address": { "YR-1.001-EN-标准": null },
+      "enabled": false,
+      "status": "candidate-needs-verification"
+    },
+    {
+      "id": "main-loop-tick",
+      "engineFunction": "游戏主循环 / 每帧 tick 点",
+      "用途": "运行时功能总入口：轮询热键、触发 dump、应用运行时改值",
+      "timing": "每帧",
+      "hookType": "prologue 追加，早退不干扰原逻辑",
+      "coldness": "MEDIUM",
+      "aresPhobosConflict": "逻辑帧常被 hook；建议选循环顶部而非逻辑帧内部",
+      "address": { "YR-1.001-EN-标准": null },
+      "enabled": false,
+      "status": "candidate-needs-verification"
+    },
+    {
+      "id": "techno-create",
+      "engineFunction": "TechnoClass / FootClass 构造或初始化",
+      "用途": "【后续】对新创建单位应用运行时改过的拷贝型属性（如最大血量）",
+      "timing": "每次单位创建",
+      "hookType": "epilogue 追加",
+      "coldness": "LOW",
+      "aresPhobosConflict": "Ares/Phobos 常 hook 单位创建，冲突概率高",
+      "address": { "YR-1.001-EN-标准": null },
+      "enabled": false,
+      "status": "candidate-needs-verification"
+    },
+    {
+      "id": "weapon-fire",
+      "engineFunction": "TechnoClass::Fire / FireAt",
+      "用途": "【后续】运行时武器数值的读取/校验/临时改动观察点",
+      "timing": "每次开火",
+      "hookType": "prologue 追加",
+      "coldness": "LOW",
+      "aresPhobosConflict": "开火链路被重度 hook；武器数值多为'现读型'，改 WeaponTypeClass 字段即可实时生效，未必需要 hook 开火点",
+      "address": { "YR-1.001-EN-标准": null },
+      "enabled": false,
+      "status": "candidate-needs-verification"
+    },
+    {
+      "id": "asset-dump-trigger",
+      "engineFunction": "待定（配合 main-loop-tick 的热键触发，通常无需独立 hook）",
+      "用途": "【可选】触发 dump 已加载进内存的素材，先做 SHP→.shp",
+      "timing": "按热键",
+      "hookType": "由 main-loop-tick 轮询驱动，一般不单独 hook",
+      "coldness": "HIGH",
+      "aresPhobosConflict": "无（不独立 hook）",
+      "address": { "YR-1.001-EN-标准": null },
+      "enabled": false,
+      "status": "design-note"
+    }
+  ]
+}

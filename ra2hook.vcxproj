@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ra2hook.vcxproj — 改写自 CnCNet/yrpp-spawner 的 Spawner.vcxproj。
+  结构：Globals 定义 YRppDir → 导入 ra2hook.props（编译设置）→ 导入 YRpp.props
+        （编译 StaticInits.cpp + 列出 YRpp 头，缺它会一堆链接错误）→ 源文件清单。
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectName>ra2hook</ProjectName>
+    <RootNamespace>ra2hook</RootNamespace>
+    <ProjectGuid>{7A2C4E10-9D3B-4F62-A1C8-5E0B7D9F2A34}</ProjectGuid>
+    <VCProjectVersion>15.0</VCProjectVersion>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ShowAllFiles>true</ShowAllFiles>
+    <ThisDir>$(MSBuildThisFileDirectory)</ThisDir>
+    <YRppDir>$(ThisDir)YRpp</YRppDir>
+  </PropertyGroup>
+
+  <Import Project="$(ThisDir)\ra2hook.props" />
+  <Import Project="$(YRppDir)\YRpp.props" />
+
+  <!-- 源文件 -->
+  <ItemGroup>
+    <ClCompile Include="$(ThisDir)\src\Main.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Hooks.RulesInject.cpp" />
+  </ItemGroup>
+
+  <!-- 头文件 -->
+  <ItemGroup>
+    <ClInclude Include="$(ThisDir)\src\Logger.h" />
+  </ItemGroup>
+</Project>

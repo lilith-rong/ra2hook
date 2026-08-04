@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # 构建配置。可改为 Debug / DevBuild / Release。
+  BUILD_CONFIGURATION: Release
+  # 解决方案文件相对仓库根的路径。
+  SOLUTION_FILE_PATH: ra2hook.sln
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    # YRpp 是 submodule，recursive 不能漏，否则一堆缺头文件。
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # windows-latest 自带 v143 工具集与 Windows 10 SDK，满足 DEVELOPMENT.md §2.3。
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v1.1
+      with:
+        vs-version: '[16.0, )'
+
+    # 让编译错误在 PR diff 里高亮。
+    - uses: ammaraskar/msvc-problem-matcher@master
+
+    - name: Build
+      working-directory: ${{ env.GITHUB_WORKSPACE }}
+      run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:GitCommit=${{ github.sha }} /p:GitBranch=${{ github.ref_name }} ${{ env.SOLUTION_FILE_PATH }}
+      shell: cmd
+
+    - name: Upload artifact
+      if: ${{ success() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ra2hook-${{ github.sha }}
+        path: |
+          ${{ env.BUILD_CONFIGURATION }}/ra2hook.dll
+          ${{ env.BUILD_CONFIGURATION }}/ra2hook.pdb
+        if-no-files-found: error
