@@ -21,6 +21,8 @@
 #include <CCINIClass.h>
 #include <RulesClass.h>
 
+#include <cstdio>      // std::snprintf
+
 #include "Logger.h"
 #include "ProbeShared.h"
 
