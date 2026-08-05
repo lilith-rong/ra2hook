@@ -57,7 +57,7 @@ namespace DumpIO {
             if (*p == '/') *p = '\\';
     }
 
-    static bool EnsureParentDir(const char* fullPath)
+    bool EnsureDirForFile(const char* fullPath)
     {
         char dir[MAX_PATH] = {};
         std::strncpy(dir, fullPath, sizeof(dir) - 1);
@@ -73,7 +73,7 @@ namespace DumpIO {
 
         char full[MAX_PATH] = {};
         BuildFullPath(relPath, full, sizeof(full));
-        if (!EnsureParentDir(full)) return false;
+        if (!EnsureDirForFile(full)) return false;
 
         std::FILE* f = std::fopen(full, "wb");
         if (!f) {

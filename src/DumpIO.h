@@ -11,6 +11,9 @@ namespace DumpIO {
     // 递归建目录（等价 mkdir -p）。已存在视为成功。
     bool EnsureDir(const char* path);
 
+    // 为一个完整文件路径创建其父目录。
+    bool EnsureDirForFile(const char* fullPath);
+
     // 用 CCFileClass 读引擎能看到的文件（透明穿透 mix、含解密），
     // 原样写到 dump 目录下的 relPath。返回写出的字节数，失败返回 -1。
     //   srcName  引擎内的文件名，如 "HTNK.VXL"
