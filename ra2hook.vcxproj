@@ -23,6 +23,7 @@
   <ItemGroup>
     <ClCompile Include="$(ThisDir)\src\Main.cpp" />
     <ClCompile Include="$(ThisDir)\src\Hooks.RulesInject.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Hooks.Probe.Late.cpp" />
   </ItemGroup>
 
   <!-- 头文件 -->
