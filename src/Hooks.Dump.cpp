@@ -18,6 +18,7 @@
 #include <Helpers/Macro.h>
 
 #include "Config.h"
+#include "ArtMap.h"
 #include "DumpIni.h"
 #include "DumpIO.h"
 #include "Logger.h"
@@ -42,10 +43,8 @@ DEFINE_HOOK(0x668F6A, RA2Hook_DumpEntry, 0x5)
         DumpIni::RunIni();
     if (cfg.dump.csf)
         DumpIni::RunCsf();
-
-    // TODO: VXL / SHP —— 需先建立 art 映射（rules 的 Image= → art 段 → 素材文件名）
     if (cfg.dump.vxl || cfg.dump.shp)
-        Log::Info(" [VXL/SHP] 尚未实现（需 art 映射），本轮跳过");
+        ArtMap::Run();
 
     Log::Info("==== ra2hook dump 结束，输出至 %s ====", DumpIO::kDumpRoot);
     return 0;

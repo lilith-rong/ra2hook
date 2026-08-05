@@ -25,6 +25,7 @@
     <ClCompile Include="$(ThisDir)\src\Config.cpp" />
     <ClCompile Include="$(ThisDir)\src\DumpIO.cpp" />
     <ClCompile Include="$(ThisDir)\src\DumpIni.cpp" />
+    <ClCompile Include="$(ThisDir)\src\ArtMap.cpp" />
     <ClCompile Include="$(ThisDir)\src\Hooks.RulesInject.cpp" />
     <ClCompile Include="$(ThisDir)\src\Hooks.Dump.cpp" />
   </ItemGroup>
@@ -35,5 +36,6 @@
     <ClInclude Include="$(ThisDir)\src\Config.h" />
     <ClInclude Include="$(ThisDir)\src\DumpIO.h" />
     <ClInclude Include="$(ThisDir)\src\DumpIni.h" />
+    <ClInclude Include="$(ThisDir)\src\ArtMap.h" />
   </ItemGroup>
 </Project>
