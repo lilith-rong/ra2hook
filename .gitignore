@@ -16,3 +16,8 @@ Release/
 # 运行时产物
 ra2hook.log
 dump/
+
+# 凭据 —— 绝不提交
+.gh_token
+*.token
+.env

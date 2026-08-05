@@ -25,12 +25,14 @@
 
 namespace DumpIni {
 
-    // 统计一个 INI 对象里的段落数，用于日志核对导出是否合理
+    // 统计一个 INI 对象里的段落数，用于日志核对导出是否合理。
+    // 注意：GenericList 末尾是哨兵节点，终止条件必须用 IsValid()，
+    // 用 != nullptr 会越过尾哨兵读到非法内存。
     static int CountSections(INIClass* pINI)
     {
         if (!pINI) return -1;
         int n = 0;
-        for (auto* s = pINI->Sections.First(); s; s = s->Next())
+        for (auto* s = pINI->Sections.First(); s && s->IsValid(); s = s->Next())
             ++n;
         return n;
     }
@@ -54,12 +56,9 @@ namespace DumpIni {
         if (!DumpIO::EnsureDirForFile(full))
             return false;
 
-        // RawFileClass 直接写磁盘（不走 mix 查找），CreateFile 会建/截断文件
+        // RawFileClass 直接写磁盘（不走 mix 查找）。
+        // Open(Write) 会按需创建，不必先 CreateFile。
         RawFileClass file(full);
-        if (!file.CreateFile()) {
-            Log::Warn("DumpIni: 无法创建 %s", full);
-            return false;
-        }
         if (!file.Open(FileAccessMode::Write)) {
             Log::Warn("DumpIni: 无法写入 %s", full);
             return false;
