@@ -22,13 +22,16 @@
   <!-- 源文件 -->
   <ItemGroup>
     <ClCompile Include="$(ThisDir)\src\Main.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Config.cpp" />
+    <ClCompile Include="$(ThisDir)\src\DumpIO.cpp" />
     <ClCompile Include="$(ThisDir)\src\Hooks.RulesInject.cpp" />
-    <ClCompile Include="$(ThisDir)\src\Hooks.Probe.Late.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Hooks.DumpProbe.cpp" />
   </ItemGroup>
 
   <!-- 头文件 -->
   <ItemGroup>
     <ClInclude Include="$(ThisDir)\src\Logger.h" />
-    <ClInclude Include="$(ThisDir)\src\ProbeShared.h" />
+    <ClInclude Include="$(ThisDir)\src\Config.h" />
+    <ClInclude Include="$(ThisDir)\src\DumpIO.h" />
   </ItemGroup>
 </Project>
