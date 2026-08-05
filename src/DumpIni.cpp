@@ -17,6 +17,8 @@
 #include <CCFileClass.h>
 
 #include <cstdio>
+#include <cstdlib>   // malloc / free
+#include <cstring>   // strstr
 
 #include "Config.h"
 #include "DumpIO.h"
@@ -37,11 +39,70 @@ namespace DumpIni {
         return n;
     }
 
-    // 把内存中的 INI 对象写到 dump\ini\<outName>
+    // 从已写出的 INI 文件里剔除首部的 [#include] 段。
+    //
+    // 为什么在文本层做而不用 INIClass::Clear：Clear(s1,s2) 的语义未文档化，
+    // 而它作用于**真实的 rules 对象**，用错会破坏游戏数据。写盘后改文本零风险。
+    //
+    // 为什么要剔除：dump 出来的 rules 里 include 内容已全部合并进来，[#include]
+    // 段只是历史记录。若直接拿这份文件当 mod 的 rules 用，Ares 会再加载一遍那
+    // 几百个文件（内容重复合并，文件缺失则报错）。剔除后 dump 才是自包含快照。
+    static bool StripIncludeSection(const char* fullPath)
+    {
+        std::FILE* f = std::fopen(fullPath, "rb");
+        if (!f) return false;
+
+        std::fseek(f, 0, SEEK_END);
+        const long size = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        if (size <= 0) { std::fclose(f); return false; }
+
+        char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(size) + 1));
+        if (!buf) { std::fclose(f); return false; }
+        const size_t got = std::fread(buf, 1, static_cast<size_t>(size), f);
+        std::fclose(f);
+        buf[got] = '\0';
+
+        // 定位 [#include] 段：从它开始，到下一个以 '[' 开头的行为止
+        const char* incl = std::strstr(buf, "[#include]");
+        if (!incl) { std::free(buf); return true; }   // 没有就无需处理
+
+        const char* p = incl + 10;                     // 跳过 "[#include]"
+        const char* nextSection = nullptr;
+        while (*p) {
+            if (*p == '\n' && *(p + 1) == '[') { nextSection = p + 1; break; }
+            ++p;
+        }
+
+        std::FILE* out = std::fopen(fullPath, "wb");
+        if (!out) { std::free(buf); return false; }
+
+        // 保留 [#include] 之前的内容
+        if (incl > buf)
+            std::fwrite(buf, 1, static_cast<size_t>(incl - buf), out);
+        // 保留下一个段落之后的全部内容
+        if (nextSection)
+            std::fwrite(nextSection, 1, got - static_cast<size_t>(nextSection - buf), out);
+
+        std::fclose(out);
+        std::free(buf);
+        return true;
+    }
+
+    // 把内存中的 INI 对象写到 dump/ini/<outName>
     static bool WriteMemoryIni(CCINIClass* pINI, const char* outName)
     {
         if (!pINI) {
             Log::Warn("DumpIni: %s 的 INI 对象为空，跳过", outName);
+            return false;
+        }
+
+        // 空对象不产出空文件——否则会让人误以为该配置本身是空的。
+        // 实测 INI_UIMD 在此时机段落数为 0（未加载或 MO 未使用）。
+        const int sections = CountSections(pINI);
+        if (sections <= 0) {
+            Log::Info("DumpIni: %-16s 跳过（段落数 %d，该 INI 实例此时未加载）",
+                      outName, sections);
             return false;
         }
 
@@ -67,7 +128,12 @@ namespace DumpIni {
         pINI->WriteCCFile(&file, false);   // 0x474430
         file.Close();
 
-        Log::Info("DumpIni: %-16s <- %d 个段落", outName, CountSections(pINI));
+        bool stripped = false;
+        if (Config::Get().dump.stripInclude)
+            stripped = StripIncludeSection(full);
+
+        Log::Info("DumpIni: %-16s <- %d 个段落%s",
+                  outName, sections, stripped ? "（已剔除 [#include]）" : "");
         return true;
     }
 

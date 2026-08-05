@@ -37,7 +37,8 @@ namespace Config {
         d.csf         = ini.ReadBool("Dump", "CSF",         d.csf);
         d.vxl         = ini.ReadBool("Dump", "VXL",         d.vxl);
         d.shp         = ini.ReadBool("Dump", "SHP",         d.shp);
-        d.sortByOwner = ini.ReadBool("Dump", "SortByOwner", d.sortByOwner);
+        d.sortByOwner   = ini.ReadBool("Dump", "SortByOwner",   d.sortByOwner);
+        d.stripInclude  = ini.ReadBool("Dump", "StripInclude",  d.stripInclude);
 
         s_settings.inject.enabled = ini.ReadBool("Inject", "Enabled", s_settings.inject.enabled);
         s_settings.logLevel       = ini.ReadInteger("Log", "Level", s_settings.logLevel);

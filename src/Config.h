@@ -16,6 +16,10 @@ namespace Config {
         bool vxl         = false;
         bool shp         = false;
         bool sortByOwner = true;    // VXL/SHP 是否按 art 注册名归类到子文件夹
+
+        // 导出 INI 时剔除首部 [#include] 段。默认开：include 内容已合并进本文件，
+        // 留着会让这份 dump 被 Ares 再次展开一遍（重复合并 / 文件缺失报错）。
+        bool stripInclude = true;
     };
 
     struct InjectSettings {
