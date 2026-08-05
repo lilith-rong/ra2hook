@@ -29,5 +29,6 @@
   <!-- 头文件 -->
   <ItemGroup>
     <ClInclude Include="$(ThisDir)\src\Logger.h" />
+    <ClInclude Include="$(ThisDir)\src\ProbeShared.h" />
   </ItemGroup>
 </Project>

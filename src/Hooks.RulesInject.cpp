@@ -1,84 +1,66 @@
-// Hooks.RulesInject.cpp — 核心 hook + 诊断探针。
+// Hooks.RulesInject.cpp — 核心 hook + 生效性验证探针。
 //
 // 注入点 0x679A15 = Phobos 命名的 RulesData_LoadBeforeTypeData。
-// 寄存器约定（已核实，见 DEVELOPMENT.md §4.2 / §9）：
+// 寄存器约定（已核实，DEVELOPMENT.md §4.2 / §9）：
 //     ECX      = RulesClass*
-//     [esp+4]  = CCINIClass*   ← 我们要写入的目标
+//     [esp+4]  = CCINIClass*   ← 注入目标
 //     补丁长度   = 0x6
-//     return 0 = 继续原流程，不改控制流
+//     return 0 = 继续原流程
 //
-// 【本轮目的】第一次探针在 0x679A15 读到 FromAresInclude=[] （空）。
-// 空值有两类完全不同的原因，应对相反，必须先区分：
-//   (A) hook 太早——此时 include 内容尚未并入 CCINIClass
-//   (B) 探针键根本不存在——ini 没被 include 成功 / 路径错 / pINI 不是 rules
-// 下面的诊断一次运行同时回答这两个问题，避免慢循环里反复猜。
+// 【上一轮结论】0x679A15 处：pINI == INI_Rules，[General]=425、[VehicleTypes]=1011
+// （rules 已完整装载，不是"太早"），WriteString 回读成功且写入能存活到 0x679CAF /
+// 0x668F6A。FromAresInclude 读不到的原因已确认为探针 ini 从未创建，与 hook 时机无关。
+//
+// 【本轮目的】验证真正关键的一点：注入能否改变引擎最终解析出的 TypeClass。
+// 手法：此处写 [E1]Strength=REAL_TEST_VALUE，然后在 Hooks.Probe.Late.cpp 里
+// 于类型解析之后读 InfantryTypeClass::Find("E1")->Strength。读到该值即证明注入生效。
+// 这个验证不依赖任何 [#include] 配置，也不需要肉眼看游戏。
 
-#include <Syringe.h>           // DEFINE_HOOK / EXPORT_FUNC / REGISTERS
-#include <Helpers/Macro.h>     // GET / GET_STACK
+#include <Syringe.h>
+#include <Helpers/Macro.h>
 #include <CCINIClass.h>
 #include <RulesClass.h>
 
 #include "Logger.h"
+#include "ProbeShared.h"
 
 namespace RulesInject {
 
     static bool s_done = false;   // 幂等：读档 / 重开局可能重入（§4.7）
 
-    // 判定一个 section 是否存在且非空：GetKeyCount > 0。
-    static int SectionKeyCount(CCINIClass* pINI, const char* section) {
-        if (!pINI) return -1;
-        return pINI->GetKeyCount(section);   // 0x526960
-    }
-
     static void Diagnose(CCINIClass* pINI) {
         Log::Info("---- ra2hook diagnose @0x679A15 ----");
 
-        // 1) pINI 是否就是全局 rules 实例？若不是，说明本 hook 拿到的 INI 不是
-        //    rules，那么"读不到 rules 里的键"完全正常，问题在选点而非 include。
-        CCINIClass* pRules = CCINIClass::INI_Rules;   // 0x887048
+        CCINIClass* pRules = CCINIClass::INI_Rules;
         Log::Info("pINI=%p  INI_Rules=%p  same=%s",
                   (void*)pINI, (void*)pRules, (pINI == pRules) ? "YES" : "NO");
 
-        // 2) pINI 里到底有没有东西？拿几个 vanilla rules 必然存在的 section 探深浅。
-        //    若这些都为 0，说明此刻 CCINIClass 尚未装载 rules 内容（hook 太早）。
-        Log::Info("keycount [General]=%d  [InfantryTypes]=%d  [VehicleTypes]=%d  [E1]=%d",
-                  SectionKeyCount(pINI, "General"),
-                  SectionKeyCount(pINI, "InfantryTypes"),
-                  SectionKeyCount(pINI, "VehicleTypes"),
-                  SectionKeyCount(pINI, "E1"));
+        // rules 装载深浅（上轮已证实为满，保留作回归对照）
+        Log::Info("keycount [General]=%d  [E1]=%d",
+                  pINI->GetKeyCount("General"), pINI->GetKeyCount("E1"));
 
-        // 3) 探针 section 本身在不在（区分"键不存在"与"值为空"）。
-        Log::Info("keycount [RA2HookProbe]=%d", SectionKeyCount(pINI, "RA2HookProbe"));
-
+        // ---- Ares [#include] 可见性 ----
+        // 需要在 RA2 根目录建 ra2hook_probe.ini 并在 rulesmd.ini 的 [#include] 里引用。
+        // 未配置时这里读到 <MISSING> 属正常，不影响下面的生效性验证。
         char buf[32] = {};
-        int len = pINI->ReadString("RA2HookProbe", "FromAresInclude", "<MISSING>", buf, sizeof(buf));
-        Log::Info("ReadString FromAresInclude -> len=%d value=[%s]", len, buf);
+        pINI->ReadString("RA2HookProbe", "FromAresInclude", "<MISSING>", buf, sizeof(buf));
+        Log::Info("[include test] FromAresInclude=[%s]  ([RA2HookProbe] keys=%d)",
+                  buf, pINI->GetKeyCount("RA2HookProbe"));
 
-        // 4) 若探针 section 存在，把它的键全列出来——可看出是键名写错还是值空。
-        int n = SectionKeyCount(pINI, "RA2HookProbe");
-        for (int i = 0; i < n && i < 8; ++i) {
-            const char* k = pINI->GetKeyName("RA2HookProbe", i);   // 0x526CC0
-            Log::Info("  [RA2HookProbe] key[%d]=%s", i, k ? k : "(null)");
-        }
+        // ---- 生效性验证：写一个引擎真的会解析的键 ----
+        // 先记录注入前的原值，便于对照（E1 香蒲步兵 vanilla Strength = 100）。
+        char before[16] = {};
+        pINI->ReadString("E1", "Strength", "<unset>", before, sizeof(before));
 
-        // 5) 同时查全局 rules 实例（若与 pINI 不同）。这能回答：
-        //    "内容其实已经在 rules 里了，只是没在我拿到的这个 pINI 里"。
-        if (pRules && pRules != pINI) {
-            Log::Info("-- via INI_Rules --");
-            Log::Info("keycount [General]=%d  [RA2HookProbe]=%d",
-                      SectionKeyCount(pRules, "General"),
-                      SectionKeyCount(pRules, "RA2HookProbe"));
-            char b2[32] = {};
-            pRules->ReadString("RA2HookProbe", "FromAresInclude", "<MISSING>", b2, sizeof(b2));
-            Log::Info("INI_Rules FromAresInclude=[%s]", b2);
-        }
+        char val[16] = {};
+        std::snprintf(val, sizeof(val), "%d", Probe::kTestStrength);
+        bool ok = pINI->WriteString("E1", "Strength", val);
 
-        // 6) 写入连通性自测：往 pINI 写一个键再读回。
-        //    读回成功 = WriteString 在此阶段可用（阶段2 的前提，§6 待验证第 2 项）。
-        pINI->WriteString("RA2HookProbe", "WriteBackTest", "42");     // 0x528660
-        char b3[16] = {};
-        pINI->ReadString("RA2HookProbe", "WriteBackTest", "<FAIL>", b3, sizeof(b3));
-        Log::Info("WriteString roundtrip -> [%s]  (expect 42)", b3);
+        char after[16] = {};
+        pINI->ReadString("E1", "Strength", "<unset>", after, sizeof(after));
+
+        Log::Info("[effect test] wrote [E1]Strength: before=[%s] write_ok=%d after=[%s] (expect %d)",
+                  before, ok ? 1 : 0, after, Probe::kTestStrength);
 
         Log::Info("---- end diagnose ----");
     }
@@ -89,14 +71,11 @@ namespace RulesInject {
 
         Diagnose(pINI);
 
-        // TODO(阶段2)：诊断结论明确后，在此逐文件 MergeFile()。
+        // TODO(阶段2)：生效性确认后，在此逐文件 MergeFile()。
     }
 
 }  // namespace RulesInject
 
-// DEFINE_HOOK 展开为 declhook + EXPORT_FUNC，把 hook 写进 DLL 导出表；
-// Syringe 启动时读取 .syhks00 段完成 patch。寄存器保存/现场恢复/被覆盖指令重放
-// 全部由 Syringe 负责（§4.8）。
 DEFINE_HOOK(0x679A15, RA2Hook_RulesInject, 0x6)
 {
     GET_STACK(CCINIClass*, pINI, 0x4);
