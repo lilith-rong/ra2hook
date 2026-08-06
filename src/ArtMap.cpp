@@ -283,12 +283,21 @@ namespace ArtMap {
             if (!ReadKey(rulesSec, "Image", artName, sizeof(artName)))
                 std::snprintf(artName, sizeof(artName), "%s", unitId);
 
-            // 2) art 段里可能再有一层 Image= 重定向
+            // 2) art 段里可能再有一层 Image= 重定向。
+            //
+            // 关键：Image= 改的是**文件名**，不代表存在同名的 art 段。
+            // 实测 [GACNST] Image=GGCNST，但 artmd.ini 里没有 [GGCNST] 段，
+            // 而 ActiveAnim=GACNST_A 等键都在原来的 [GACNST] 段里。
+            // 上一版重定向后无条件改写 artSec，于是 artSec 变成 nullptr，
+            // 所有带 Image= 重定向的建筑都读不到动画键（131 个 _A.SHP 全部
+            // 来自无重定向的单位）。
+            // 因此：只有重定向目标段确实存在时才切换，否则保留原段。
             auto* artSec = FindSection(pArt, artName);
             char image[128] = {};
             if (ReadKey(artSec, "Image", image, sizeof(image))) {
                 std::snprintf(artName, sizeof(artName), "%s", image);
-                artSec = FindSection(pArt, artName);   // 重定向后重新定位
+                if (auto* redirected = FindSection(pArt, artName))
+                    artSec = redirected;
             }
 
             // 无 art 段的单位：其素材仍可能以 ID 命名存在于 mix 中，
