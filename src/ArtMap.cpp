@@ -27,6 +27,7 @@ namespace ArtMap {
             int filesFound   = 0;   // 实际存在并导出的文件数
             int filesMiss    = 0;   // 试探未命中的候选数
             int bytes        = 0;
+            int animRefs     = 0;   // 解析过的动画引用数（间接引用）
         };
 
         // NewTheater 的地图类型前缀。文件名第 2 个字母会被替换成这些。
@@ -36,6 +37,42 @@ namespace ArtMap {
         // SHP 主体未命中时的诊断计数（跑通后可连同诊断代码一并删除）
         constexpr int kShpDiagMax = 12;
         int s_shpDiag = 0;
+
+        // ── 间接引用的动画键 ────────────────────────────────────────────────
+        //
+        // 建筑的附属动画（建造动画、运行动画、损坏动画等）是**两层引用**，
+        // 已用真实 artmo.ini 验证：
+        //
+        //   [GAPOWR]    ActiveAnim=GAPOWR_A     ← 值是「动画段名」，非文件名
+        //   [GAPOWR_A]  Image=GGPOWR_A          ← 这一层才给出真正的文件名
+        //               NewTheater=yes          ← 且可能带地图变体
+        //
+        // 所以必须跟两层：动画名 → 动画段 → Image= → <文件名>.SHP。
+        // 直接把 ActiveAnim 的值当文件名会全部落空。
+        //
+        // 键名取自对真实 artmo.ini 的频次统计。必须排除 ZAdjust / YSort /
+        // Powered / PoweredLight 这类**参数键**——ActiveAnimZAdjust=-32 是
+        // 数值不是动画名，故逐个列出而不做 "含 Anim" 的前缀匹配。
+        // ...Damaged 例外：它确实指向另一个动画段（GAPOWR 的
+        // ActiveAnimDamaged=GAPOWR_AD），因此包含在内。
+        const char* const kAnimKeys[] = {
+            // 建造动画
+            "Buildup",
+            // 运行动画及其损坏态（Two/Three/Four 是同一建筑的多层动画）
+            "ActiveAnim",      "ActiveAnimDamaged",
+            "ActiveAnimTwo",   "ActiveAnimTwoDamaged",
+            "ActiveAnimThree", "ActiveAnimThreeDamaged",
+            "ActiveAnimFour",  "ActiveAnimFourDamaged",
+            // 特殊 / 超武 / 空闲
+            "SpecialAnim",      "SpecialAnimDamaged",
+            "SpecialAnimTwo",   "SpecialAnimTwoDamaged",
+            "SpecialAnimThree", "SpecialAnimFour",
+            "SuperAnim",        "SuperAnimTwo",
+            "SuperAnimThree",   "SuperAnimFour",
+            "IdleAnim",         "IdleAnimDamaged",
+            // 其他附属动画
+            "TrailerAnim", "ExpireAnim", "TurretAnim", "BarrelAnim", "Bib",
+        };
 
         // ── 为什么这里不用引擎的 ReadString / GetKeyCount ──────────────────
         //
@@ -193,6 +230,49 @@ namespace ArtMap {
             }
         }
 
+        // 导出一个「动画引用」指向的 SHP。
+        //
+        // animName 是 art 里某个动画键的值（如 ActiveAnim=GAPOWR_A 的 GAPOWR_A）。
+        // 解析规则（已用真实数据验证）：
+        //   1. 在 art 里找同名段 [GAPOWR_A]
+        //   2. 若该段有 Image=，用它作文件名；否则退回用动画名本身
+        //   3. 该段自己的 NewTheater= 决定是否试地图变体
+        // 找不到动画段时仍按动画名试探一次——部分动画没有独立 art 段。
+        void DumpAnimRef(CCINIClass* pArt, const char* animName,
+                         const char* ownerDir, Stats& st)
+        {
+            if (!animName || !animName[0]) return;
+            if (_stricmp(animName, "none") == 0 ||
+                _stricmp(animName, "<none>") == 0) return;
+
+            ++st.animRefs;
+
+            char fileBase[128] = {};
+            std::snprintf(fileBase, sizeof(fileBase), "%s", animName);
+            bool animNewTheater = false;
+
+            if (auto* animSec = FindSection(pArt, animName)) {
+                char img[128] = {};
+                if (ReadKey(animSec, "Image", img, sizeof(img)))
+                    std::snprintf(fileBase, sizeof(fileBase), "%s", img);
+                animNewTheater = IsTrue(animSec, "NewTheater");
+            }
+
+            TryDumpVariants(fileBase, ".SHP", "shp", ownerDir, animNewTheater, st);
+        }
+
+        // 遍历一个单位 art 段里的全部动画键，逐个解析并导出
+        void DumpAllAnims(CCINIClass* pArt, INIClass::INISection* artSec,
+                          const char* ownerDir, Stats& st)
+        {
+            if (!artSec) return;
+            for (const char* key : kAnimKeys) {
+                char val[128] = {};
+                if (ReadKey(artSec, key, val, sizeof(val)))
+                    DumpAnimRef(pArt, val, ownerDir, st);
+            }
+        }
+
         // 处理一个单位：解析它的 art 段，导出全部直接引用的素材
         void ProcessUnit(CCINIClass* pRules, CCINIClass* pArt,
                          const char* unitId, bool sortByOwner, Stats& st)
@@ -297,6 +377,11 @@ namespace ArtMap {
                 if (ReadKey(artSec, "AltCameo", cameo, sizeof(cameo)))
                     TryDumpVariants(cameo, ".SHP", cameoDir, ownerDir, false, st);
             }
+
+            // 附属动画（间接引用）：建造动画、运行动画、损坏动画等。
+            // 这些一律是 SHP，故与图标同样放进该单位的目录，便于整套取用。
+            if (cfg.dump.shp)
+                DumpAllAnims(pArt, artSec, ownerDir, st);
         }
 
         // OnlyUnits 过滤：配置里给了逗号分隔的 ID 列表时，只处理这些单位。
@@ -381,8 +466,9 @@ namespace ArtMap {
             ProcessTypeList(pRules, pArt, list, cfg.dump.sortByOwner, st);
 
         Log::Info(" [VXL/SHP] 完成：%d 个单位（其中 %d 个无 art 段），"
-                  "导出 %d 个文件（%d 字节），未命中候选 %d",
-                  st.units, st.noArtSection, st.filesFound, st.bytes, st.filesMiss);
+                  "解析动画引用 %d 个，导出 %d 个文件（%d 字节），未命中候选 %d",
+                  st.units, st.noArtSection, st.animRefs,
+                  st.filesFound, st.bytes, st.filesMiss);
     }
 
 }  // namespace ArtMap
