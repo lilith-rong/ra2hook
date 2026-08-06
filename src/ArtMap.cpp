@@ -11,7 +11,6 @@
 
 #include <cstdio>
 #include <cstring>
-#include <string.h>   // _stricmp
 
 #include "ArtMap.h"
 #include "Config.h"
@@ -23,57 +22,88 @@ namespace ArtMap {
     namespace {
 
         struct Stats {
-            int units      = 0;   // 扫过的单位数
-            int filesFound = 0;   // 实际存在并导出的文件数
-            int filesMiss  = 0;   // 试探未命中的候选数
-            int bytes      = 0;
+            int units        = 0;   // 扫过的单位数
+            int noArtSection = 0;   // 其中没有 art 段的（只能按 ID 试探）
+            int filesFound   = 0;   // 实际存在并导出的文件数
+            int filesMiss    = 0;   // 试探未命中的候选数
+            int bytes        = 0;
         };
 
         // NewTheater 的地图类型前缀。文件名第 2 个字母会被替换成这些。
         // 例："GAPOWR" 在雪地是 "GSPOWR"。实测 art 里 NewTheater=yes 有 2315 处。
         constexpr char kTheaterLetters[] = { 'A', 'T', 'U', 'S', 'L', 'D', 'N' };
 
+        // 段是否存在。这个检查是必须的，不是防御性冗余：
+        //
+        // 引擎的 INI 读取内部缓存了「当前段」，读一个**不存在的段**时会回退到
+        // 上一次成功读取的段（Phobos 的 ReadString 包装里那个 useCurrentSection
+        // 参数即为此机制）。实测后果：2687 个无 art 段的单位全部读到了同一个
+        // CameoPCX=mcvicon.pcx（该值在 artmd.ini 里仅出现 3 次），于是每个单位
+        // 目录里都被写进同一个 mcvicon.pcx。
+        bool SectionExists(CCINIClass* pINI, const char* section)
+        {
+            return section && section[0] && pINI->GetKeyCount(section) > 0;
+        }
+
         bool IsTrue(CCINIClass* pINI, const char* section, const char* key)
         {
+            if (!SectionExists(pINI, section)) return false;
             return pINI->ReadBool(section, key, false);
         }
 
-        // 读一个字符串键；不存在返回 false
+        // 读一个字符串键；段或键不存在返回 false。
+        // 段存在性检查不可省略，原因见 SectionExists。
         bool ReadKey(CCINIClass* pINI, const char* section, const char* key,
                      char* out, int outSize)
         {
             out[0] = '\0';
+            if (!SectionExists(pINI, section))
+                return false;
             pINI->ReadString(section, key, "", out, static_cast<size_t>(outSize));
             return out[0] != '\0';
         }
 
-        // 去掉扩展名（"giicon.pcx" -> "giicon"）
-        void StripExt(char* s)
-        {
-            char* dot = std::strrchr(s, '.');
-            if (dot) *dot = '\0';
-        }
+        // 去重：避免对同一 (单位, 文件) 组合重复 Exists()/写盘。
+        //
+        // 按单位归类时，同一文件被不同单位引用**应当**各写一份，所以 key 含
+        // ownerDir。但这样 key 总数 ≈ 单位数 × 候选数，量级几万——上一版用
+        // 4096 条的线性数组，既会中途静默失效，每次查找还要线性扫描。
+        // 改为哈希集合：固定桶数、开放寻址，命中/插入都是常数时间。
+        constexpr int kSeenBuckets = 1 << 16;      // 65536，足够容纳几万条
+        unsigned int s_seenHash[kSeenBuckets] = {};
+        int          s_seenCount = 0;
 
-        // 已试探过的候选文件名（含未命中），避免重复的 Exists() 与重复写盘。
-        // 多个单位常共用同一个 Image=，不去重会做大量无用功。
-        // 注意：按单位归类时，同一文件被不同单位引用**应当**各写一份，
-        // 故 key 里带上 ownerDir。
-        constexpr int kSeenCap = 4096;
-        char  s_seen[kSeenCap][96];
-        int   s_seenCount = 0;
+        unsigned int HashKey(const char* ownerDir, const char* fileName)
+        {
+            // FNV-1a，大小写无关（引擎文件名不区分大小写）
+            unsigned int h = 2166136261u;
+            for (const char* p = ownerDir ? ownerDir : ""; *p; ++p) {
+                char c = (*p >= 'a' && *p <= 'z') ? static_cast<char>(*p - 32) : *p;
+                h = (h ^ static_cast<unsigned char>(c)) * 16777619u;
+            }
+            h = (h ^ '|') * 16777619u;
+            for (const char* p = fileName; *p; ++p) {
+                char c = (*p >= 'a' && *p <= 'z') ? static_cast<char>(*p - 32) : *p;
+                h = (h ^ static_cast<unsigned char>(c)) * 16777619u;
+            }
+            return h ? h : 1u;   // 0 用作空槽标记
+        }
 
         bool AlreadySeen(const char* fileName, const char* ownerDir)
         {
-            char key[96] = {};
-            std::snprintf(key, sizeof(key), "%s|%s", ownerDir ? ownerDir : "", fileName);
-            for (int i = 0; i < s_seenCount; ++i)
-                if (_stricmp(s_seen[i], key) == 0)
+            const unsigned int h = HashKey(ownerDir, fileName);
+            unsigned int idx = h & (kSeenBuckets - 1);
+            for (int probe = 0; probe < kSeenBuckets; ++probe) {
+                if (s_seenHash[idx] == 0) {          // 空槽 -> 未见过，占用它
+                    s_seenHash[idx] = h;
+                    ++s_seenCount;
+                    return false;
+                }
+                if (s_seenHash[idx] == h)            // 见过
                     return true;
-            if (s_seenCount < kSeenCap) {
-                std::snprintf(s_seen[s_seenCount], sizeof(s_seen[0]), "%s", key);
-                ++s_seenCount;
+                idx = (idx + 1) & (kSeenBuckets - 1);
             }
-            return false;
+            return false;   // 表满（实际不会发生）
         }
 
         // 尝试导出一个候选文件。存在则写盘，返回字节数；不存在返回 0。
@@ -141,10 +171,15 @@ namespace ArtMap {
             if (ReadKey(pArt, artName, "Image", image, sizeof(image)))
                 std::snprintf(artName, sizeof(artName), "%s", image);
 
-            if (pArt->GetKeyCount(artName) <= 0 && pRules->GetKeyCount(unitId) <= 0)
-                return;
+            // art 段不存在就直接退出：这类单位（实测 2687 个中的大多数）没有
+            // 自己的 art 定义，继续往下读任何键都会因引擎的段回退机制拿到
+            // 上一个单位的值。它们的素材仍可能以 ID 命名存在于 mix 中，
+            // 故仍按 ID 试探主体文件，但不再读任何 art 键。
+            const bool hasArt = SectionExists(pArt, artName);
 
             ++st.units;
+            if (!hasArt)
+                ++st.noArtSection;
 
             // 归类目录用单位 ID（而非 art 名）——便于按注册名查找
             const char* ownerDir = sortByOwner ? unitId : nullptr;
@@ -170,12 +205,26 @@ namespace ArtMap {
                 }
             }
 
+            // 无 art 段时 isVoxel 必为 false，不能因此就当作 SHP 单位：
+            // 上一版正是在这里让 2687 个无 art 段的单位全部走进 SHP 分支，
+            // 又通过段回退读到同一个 CameoPCX，于是每个目录里都是 mcvicon.pcx。
+            // 现在：无 art 段者只按 ID 试探两种主体文件，不读任何 art 键。
+            if (!hasArt) {
+                if (cfg.dump.vxl) {
+                    TryDumpVariants(artName, ".VXL", "vxl", ownerDir, false, st);
+                    TryDumpVariants(artName, ".HVA", "vxl", ownerDir, false, st);
+                }
+                if (cfg.dump.shp)
+                    TryDumpVariants(artName, ".SHP", "shp", ownerDir, false, st);
+                return;
+            }
+
             if (!isVoxel && cfg.dump.shp) {
                 // SHP 才需要 NewTheater 变体（建筑居多）
                 TryDumpVariants(artName, ".SHP", "shp", ownerDir, newTheater, st);
             }
 
-            // 图标：CameoPCX / AltCameoPCX 是显式键，另有 SHP 形式的 Cameo
+            // 图标：CameoPCX / AltCameoPCX。这两个键读取前已由 ReadKey 做段检查。
             if (cfg.dump.shp) {
                 char cameo[128] = {};
                 if (ReadKey(pArt, artName, "CameoPCX", cameo, sizeof(cameo)))
@@ -238,8 +287,9 @@ namespace ArtMap {
         for (const char* list : kLists)
             ProcessTypeList(pRules, pArt, list, cfg.dump.sortByOwner, st);
 
-        Log::Info(" [VXL/SHP] 完成：%d 个单位，导出 %d 个文件（%d 字节），未命中候选 %d",
-                  st.units, st.filesFound, st.bytes, st.filesMiss);
+        Log::Info(" [VXL/SHP] 完成：%d 个单位（其中 %d 个无 art 段），"
+                  "导出 %d 个文件（%d 字节），未命中候选 %d",
+                  st.units, st.noArtSection, st.filesFound, st.bytes, st.filesMiss);
     }
 
 }  // namespace ArtMap
