@@ -193,10 +193,6 @@ namespace ArtMap {
             }
         }
 
-        // SHP 主体全部未命中的诊断计数器（只打印前若干条，避免日志爆掉）
-        constexpr int kShpDiagMax = 15;
-        int s_shpDiag = 0;
-
         // 处理一个单位：解析它的 art 段，导出全部直接引用的素材
         void ProcessUnit(CCINIClass* pRules, CCINIClass* pArt,
                          const char* unitId, bool sortByOwner, Stats& st)
