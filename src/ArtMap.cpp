@@ -33,6 +33,10 @@ namespace ArtMap {
         // 例："GAPOWR" 在雪地是 "GSPOWR"。实测 art 里 NewTheater=yes 有 2315 处。
         constexpr char kTheaterLetters[] = { 'A', 'T', 'U', 'S', 'L', 'D', 'N' };
 
+        // SHP 主体未命中时的诊断计数（跑通后可连同诊断代码一并删除）
+        constexpr int kShpDiagMax = 12;
+        int s_shpDiag = 0;
+
         // ── 为什么这里不用引擎的 ReadString / GetKeyCount ──────────────────
         //
         // 引擎的 INI 读取内部缓存了「当前段」。读一个**不存在的段**时它不报错，
@@ -189,6 +193,10 @@ namespace ArtMap {
             }
         }
 
+        // SHP 主体全部未命中的诊断计数器（只打印前若干条，避免日志爆掉）
+        constexpr int kShpDiagMax = 15;
+        int s_shpDiag = 0;
+
         // 处理一个单位：解析它的 art 段，导出全部直接引用的素材
         void ProcessUnit(CCINIClass* pRules, CCINIClass* pArt,
                          const char* unitId, bool sortByOwner, Stats& st)
@@ -256,18 +264,42 @@ namespace ArtMap {
             if (!isVoxel && cfg.dump.shp) {
                 // SHP 才需要 NewTheater 变体（建筑居多）
                 TryDumpVariants(artName, ".SHP", "shp", ownerDir, newTheater, st);
+
+                // 诊断：只有图标被导出、主体 SHP 全部未命中时，需要知道究竟试了
+                // 什么名字。对前若干个非 Voxel 单位打印实测结果（Info 级，便于
+                // 用户直接贴日志）。跑通后可删。
+                if (s_shpDiag < kShpDiagMax) {
+                    ++s_shpDiag;
+                    char n1[160] = {}, n2[160] = {};
+                    std::snprintf(n1, sizeof(n1), "%s.SHP", artName);
+                    std::snprintf(n2, sizeof(n2), "%s.shp", artName);
+                    CCFileClass f1(n1), f2(n2);
+                    Log::Info("  [shp诊断] %s -> art=%s NewTheater=%d "
+                              "%s:%d %s:%d",
+                              unitId, artName, newTheater ? 1 : 0,
+                              n1, f1.Exists() ? 1 : 0,
+                              n2, f2.Exists() ? 1 : 0);
+                }
             }
 
             // 图标：CameoPCX / AltCameoPCX（仅当 art 段存在时才有意义）
             //
-            // TODO（用户已确认，待 SHP 修好后再做）：VXL 单位的图标也应跟去
-            // vxl/<ID>/ 目录，使一个单位的全部素材集中在一处。目前统一放 shp/。
-            if (cfg.dump.shp) {
+            // 图标与主体同目录：VXL 单位的图标跟去 vxl/<ID>/，SHP 单位留在
+            // shp/<ID>/，这样一个单位的全部素材集中在一处。
+            const char* cameoDir  = isVoxel ? "vxl" : "shp";
+            const bool  wantCameo = isVoxel ? cfg.dump.vxl : cfg.dump.shp;
+            if (wantCameo) {
                 char cameo[128] = {};
                 if (ReadKey(artSec, "CameoPCX", cameo, sizeof(cameo)))
-                    TryDump(cameo, "shp", ownerDir, st);
+                    TryDump(cameo, cameoDir, ownerDir, st);
                 if (ReadKey(artSec, "AltCameoPCX", cameo, sizeof(cameo)))
-                    TryDump(cameo, "shp", ownerDir, st);
+                    TryDump(cameo, cameoDir, ownerDir, st);
+
+                // SHP 形式的图标（部分 mod 用 Cameo= 指向 SHP 而非 PCX）
+                if (ReadKey(artSec, "Cameo", cameo, sizeof(cameo)))
+                    TryDumpVariants(cameo, ".SHP", cameoDir, ownerDir, false, st);
+                if (ReadKey(artSec, "AltCameo", cameo, sizeof(cameo)))
+                    TryDumpVariants(cameo, ".SHP", cameoDir, ownerDir, false, st);
             }
         }
 

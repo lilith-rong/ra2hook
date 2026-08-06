@@ -21,3 +21,8 @@ dump/
 .gh_token
 *.token
 .env
+
+# 第三方素材包 / 压缩包（勿入库）
+*.7z
+*.zip
+*.rar
