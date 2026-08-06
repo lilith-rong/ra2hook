@@ -20,6 +20,11 @@ namespace Config {
         // 导出 INI 时剔除首部 [#include] 段。默认开：include 内容已合并进本文件，
         // 留着会让这份 dump 被 Ares 再次展开一遍（重复合并 / 文件缺失报错）。
         bool stripInclude = true;
+
+        // 只导出指定单位的 VXL/SHP（逗号分隔的 ID，如 "HTNK,MTNK,GI"）。
+        // 留空 = 全部。仅影响 VXL/SHP，不影响 INI/CSF。
+        // 长度上限够放几十个 ID；超长会被截断并告警。
+        char onlyUnits[512] = {};
     };
 
     struct InjectSettings {

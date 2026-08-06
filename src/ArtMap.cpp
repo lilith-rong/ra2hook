@@ -33,33 +33,65 @@ namespace ArtMap {
         // 例："GAPOWR" 在雪地是 "GSPOWR"。实测 art 里 NewTheater=yes 有 2315 处。
         constexpr char kTheaterLetters[] = { 'A', 'T', 'U', 'S', 'L', 'D', 'N' };
 
-        // 段是否存在。这个检查是必须的，不是防御性冗余：
+        // ── 为什么这里不用引擎的 ReadString / GetKeyCount ──────────────────
         //
-        // 引擎的 INI 读取内部缓存了「当前段」，读一个**不存在的段**时会回退到
-        // 上一次成功读取的段（Phobos 的 ReadString 包装里那个 useCurrentSection
-        // 参数即为此机制）。实测后果：2687 个无 art 段的单位全部读到了同一个
-        // CameoPCX=mcvicon.pcx（该值在 artmd.ini 里仅出现 3 次），于是每个单位
-        // 目录里都被写进同一个 mcvicon.pcx。
-        bool SectionExists(CCINIClass* pINI, const char* section)
+        // 引擎的 INI 读取内部缓存了「当前段」。读一个**不存在的段**时它不报错，
+        // 而是回退到上一次成功读取的段（Phobos 的 ReadString 包装里那个
+        // useCurrentSection 参数即为此机制）。
+        //
+        // 实测证据：[VehicleTypes] 的第 0 项是 AMCV，它有 art 段且
+        // CameoPCX=mcvicon.pcx。其后 2627 个无 art 段的单位全部读到了这同一个
+        // 值 —— 2628 个单位目录里 2627 个都只有 mcvicon.pcx。
+        //
+        // 关键：GetKeyCount 同样受此机制影响，对不存在的段会返回「当前段」的
+        // 键数（>0），所以用它做段存在性检查是无效的 —— 检查恒为真。这正是
+        // 上一版修复失败的原因。
+        //
+        // 因此下面全部改为**直接遍历 INIClass 的链表结构**，不经过任何引擎
+        // 读取函数，也就不存在隐藏状态。Phobos 判段存在用的是 GetSection() 的
+        // 返回指针，同理。
+        //
+        // 注意 GenericList 末尾是哨兵节点，终止条件必须用 IsValid()。
+
+        INIClass::INISection* FindSection(CCINIClass* pINI, const char* section)
         {
-            return section && section[0] && pINI->GetKeyCount(section) > 0;
+            if (!pINI || !section || !section[0]) return nullptr;
+            for (auto* s = pINI->Sections.First(); s && s->IsValid(); s = s->Next()) {
+                if (s->Name && _stricmp(s->Name, section) == 0)
+                    return s;
+            }
+            return nullptr;
         }
 
-        bool IsTrue(CCINIClass* pINI, const char* section, const char* key)
+        // 在已定位的段里找键，返回其值（未找到返回 nullptr）
+        const char* FindValue(INIClass::INISection* sec, const char* key)
         {
-            if (!SectionExists(pINI, section)) return false;
-            return pINI->ReadBool(section, key, false);
+            if (!sec || !key) return nullptr;
+            // Entries 声明为 List<INIEntry*>，First() 的返回类型对不上实际布局，
+            // 故走 GenericList 层自行转型。
+            for (auto* n = sec->Entries.GenericList::First(); n && n->IsValid(); n = n->Next()) {
+                auto* e = static_cast<INIClass::INIEntry*>(n);
+                if (e->Key && _stricmp(e->Key, key) == 0)
+                    return e->Value;
+            }
+            return nullptr;
         }
 
-        // 读一个字符串键；段或键不存在返回 false。
-        // 段存在性检查不可省略，原因见 SectionExists。
-        bool ReadKey(CCINIClass* pINI, const char* section, const char* key,
+        bool IsTrue(INIClass::INISection* sec, const char* key)
+        {
+            const char* v = FindValue(sec, key);
+            if (!v || !v[0]) return false;
+            return v[0] == 'y' || v[0] == 'Y' || v[0] == 't' || v[0] == 'T' || v[0] == '1';
+        }
+
+        // 读一个字符串键；段或键不存在返回 false，且 out 保持为空串。
+        bool ReadKey(INIClass::INISection* sec, const char* key,
                      char* out, int outSize)
         {
             out[0] = '\0';
-            if (!SectionExists(pINI, section))
-                return false;
-            pINI->ReadString(section, key, "", out, static_cast<size_t>(outSize));
+            const char* v = FindValue(sec, key);
+            if (!v || !v[0]) return false;
+            std::snprintf(out, static_cast<size_t>(outSize), "%s", v);
             return out[0] != '\0';
         }
 
@@ -163,19 +195,21 @@ namespace ArtMap {
         {
             // 1) rules 里的 Image= 决定 art 段名；缺省用 ID 本身
             char artName[128] = {};
-            if (!ReadKey(pRules, unitId, "Image", artName, sizeof(artName)))
+            auto* rulesSec = FindSection(pRules, unitId);
+            if (!ReadKey(rulesSec, "Image", artName, sizeof(artName)))
                 std::snprintf(artName, sizeof(artName), "%s", unitId);
 
             // 2) art 段里可能再有一层 Image= 重定向
+            auto* artSec = FindSection(pArt, artName);
             char image[128] = {};
-            if (ReadKey(pArt, artName, "Image", image, sizeof(image)))
+            if (ReadKey(artSec, "Image", image, sizeof(image))) {
                 std::snprintf(artName, sizeof(artName), "%s", image);
+                artSec = FindSection(pArt, artName);   // 重定向后重新定位
+            }
 
-            // art 段不存在就直接退出：这类单位（实测 2687 个中的大多数）没有
-            // 自己的 art 定义，继续往下读任何键都会因引擎的段回退机制拿到
-            // 上一个单位的值。它们的素材仍可能以 ID 命名存在于 mix 中，
-            // 故仍按 ID 试探主体文件，但不再读任何 art 键。
-            const bool hasArt = SectionExists(pArt, artName);
+            // 无 art 段的单位：其素材仍可能以 ID 命名存在于 mix 中，
+            // 故仍按 ID 试探主体文件，但不读任何 art 键（也无从可读）。
+            const bool hasArt = (artSec != nullptr);
 
             ++st.units;
             if (!hasArt)
@@ -184,8 +218,8 @@ namespace ArtMap {
             // 归类目录用单位 ID（而非 art 名）——便于按注册名查找
             const char* ownerDir = sortByOwner ? unitId : nullptr;
 
-            const bool isVoxel   = IsTrue(pArt, artName, "Voxel");
-            const bool newTheater = IsTrue(pArt, artName, "NewTheater");
+            const bool isVoxel    = IsTrue(artSec, "Voxel");
+            const bool newTheater = IsTrue(artSec, "NewTheater");
             const auto& cfg = Config::Get();
 
             if (isVoxel && cfg.dump.vxl) {
@@ -224,37 +258,68 @@ namespace ArtMap {
                 TryDumpVariants(artName, ".SHP", "shp", ownerDir, newTheater, st);
             }
 
-            // 图标：CameoPCX / AltCameoPCX。这两个键读取前已由 ReadKey 做段检查。
+            // 图标：CameoPCX / AltCameoPCX（仅当 art 段存在时才有意义）
+            //
+            // TODO（用户已确认，待 SHP 修好后再做）：VXL 单位的图标也应跟去
+            // vxl/<ID>/ 目录，使一个单位的全部素材集中在一处。目前统一放 shp/。
             if (cfg.dump.shp) {
                 char cameo[128] = {};
-                if (ReadKey(pArt, artName, "CameoPCX", cameo, sizeof(cameo)))
+                if (ReadKey(artSec, "CameoPCX", cameo, sizeof(cameo)))
                     TryDump(cameo, "shp", ownerDir, st);
-                if (ReadKey(pArt, artName, "AltCameoPCX", cameo, sizeof(cameo)))
+                if (ReadKey(artSec, "AltCameoPCX", cameo, sizeof(cameo)))
                     TryDump(cameo, "shp", ownerDir, st);
             }
         }
 
-        // 遍历 rules 里一个类型列表段（如 [VehicleTypes]）
+        // OnlyUnits 过滤：配置里给了逗号分隔的 ID 列表时，只处理这些单位。
+        // 留空表示不过滤（全部导出）。比较不区分大小写。
+        bool UnitAllowed(const char* unitId)
+        {
+            const char* list = Config::Get().dump.onlyUnits;
+            if (!list || !list[0]) return true;      // 未配置 -> 全部
+
+            const size_t idLen = std::strlen(unitId);
+            const char* p = list;
+            while (*p) {
+                while (*p == ',' || *p == ' ' || *p == '\t') ++p;
+                const char* start = p;
+                while (*p && *p != ',') ++p;
+                const char* end = p;
+                while (end > start && (end[-1] == ' ' || end[-1] == '\t')) --end;
+
+                const size_t len = static_cast<size_t>(end - start);
+                if (len == idLen && _strnicmp(start, unitId, len) == 0)
+                    return true;
+            }
+            return false;
+        }
+
+        // 遍历 rules 里一个类型列表段（如 [VehicleTypes]）。
+        // 同样直接遍历链表：GetKeyCount/GetKeyName/ReadString 都受段回退影响。
         void ProcessTypeList(CCINIClass* pRules, CCINIClass* pArt,
                              const char* listSection, bool sortByOwner, Stats& st)
         {
-            const int count = pRules->GetKeyCount(listSection);
-            if (count <= 0) {
-                Log::Info("  [%s] 无条目，跳过", listSection);
+            auto* listSec = FindSection(pRules, listSection);
+            if (!listSec) {
+                Log::Info("  [%s] 段不存在，跳过", listSection);
                 return;
             }
 
             const Stats before = st;
-            for (int i = 0; i < count; ++i) {
-                const char* key = pRules->GetKeyName(listSection, i);
-                if (!key) continue;
+            int count = 0;
+
+            // 列表段的形式是 0=AMCV / 1=AHMV / ...，值即单位 ID
+            for (auto* n = listSec->Entries.GenericList::First(); n && n->IsValid(); n = n->Next()) {
+                auto* e = static_cast<INIClass::INIEntry*>(n);
+                if (!e->Value || !e->Value[0]) continue;
+                ++count;
 
                 char id[128] = {};
-                pRules->ReadString(listSection, key, "", id, sizeof(id));
-                if (id[0] == '\0') continue;
-
+                std::snprintf(id, sizeof(id), "%s", e->Value);
+                if (!UnitAllowed(id)) continue;
                 ProcessUnit(pRules, pArt, id, sortByOwner, st);
             }
+
             Log::Info("  [%-14s] %4d 项 -> 导出 %d 个文件",
                       listSection, count, st.filesFound - before.filesFound);
         }

@@ -40,6 +40,11 @@ namespace Config {
         d.sortByOwner   = ini.ReadBool("Dump", "SortByOwner",   d.sortByOwner);
         d.stripInclude  = ini.ReadBool("Dump", "StripInclude",  d.stripInclude);
 
+        // OnlyUnits：逗号分隔的单位 ID 白名单，留空则全部导出。
+        // 这里用 ReadString 是安全的——[Dump] 段确实存在（文件存在才走到这），
+        // 段回退机制只在读**不存在的段**时才误导。
+        ini.ReadString("Dump", "OnlyUnits", "", d.onlyUnits, sizeof(d.onlyUnits));
+
         s_settings.inject.enabled = ini.ReadBool("Inject", "Enabled", s_settings.inject.enabled);
         s_settings.logLevel       = ini.ReadInteger("Log", "Level", s_settings.logLevel);
 
@@ -49,6 +54,9 @@ namespace Config {
                   d.enabled ? 1 : 0, d.ini ? 1 : 0, d.csf ? 1 : 0,
                   d.vxl ? 1 : 0, d.shp ? 1 : 0, d.sortByOwner ? 1 : 0,
                   s_settings.inject.enabled ? 1 : 0);
+
+        if (d.onlyUnits[0])
+            Log::Info("Config: OnlyUnits=[%s]（仅导出这些单位）", d.onlyUnits);
     }
 
     const Settings& Get()
