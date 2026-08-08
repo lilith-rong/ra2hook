@@ -65,10 +65,12 @@ namespace Config {
         // Enabled 可能被错误地打开。故先查段，存在才读。
         s_settings.inject.enabled = false;
         s_settings.inject.files[0] = '\0';
+        s_settings.inject.mix     = false;
         if (FindSection(&ini, "Inject")) {
             s_settings.inject.enabled = ini.ReadBool("Inject", "Enabled", false);
             ini.ReadString("Inject", "Files", "", s_settings.inject.files,
                            sizeof(s_settings.inject.files));
+            s_settings.inject.mix = ini.ReadBool("Inject", "Mix", false);
         } else {
             Log::Debug("Config: [Inject] 段不存在，inject 保持关闭");
         }
@@ -77,10 +79,11 @@ namespace Config {
 
         Log::g_level = static_cast<Log::Level>(s_settings.logLevel);
 
-        Log::Info("Config: dump=%d (ini=%d csf=%d vxl=%d shp=%d sort=%d) inject=%d",
+        Log::Info("Config: dump=%d (ini=%d csf=%d vxl=%d shp=%d sort=%d) inject=%d mix=%d",
                   d.enabled ? 1 : 0, d.ini ? 1 : 0, d.csf ? 1 : 0,
                   d.vxl ? 1 : 0, d.shp ? 1 : 0, d.sortByOwner ? 1 : 0,
-                  s_settings.inject.enabled ? 1 : 0);
+                  s_settings.inject.enabled ? 1 : 0,
+                  s_settings.inject.mix ? 1 : 0);
 
         if (d.onlyUnits[0])
             Log::Info("Config: OnlyUnits=[%s]（仅导出这些单位）", d.onlyUnits);

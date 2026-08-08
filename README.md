@@ -83,8 +83,8 @@ FromAresInclude=1
 - ✅ 设计已定（DEVELOPMENT.md v0.2）
 - ✅ 工程文件齐备，CI 编译通过
 - ✅ **dump 方向已实现**：INI/CSF/VXL/SHP/HVA 导出（`src/DumpIni.cpp` + `src/ArtMap.cpp`），已对真实 MO 数据核对
-- ✅ **inject 核心已实现**：`0x679A15` 注入点探针通过（写入 `[E1]Strength` 被引擎真实采纳），合并逻辑见 `src/Hooks.RulesInject.cpp`——`ra2hook\inject\*.ini`（或 `[Inject] Files=`）逐键并进 rules，后写胜出
-- ⬜ **inject 待实测**：本轮改动尚未本地编译/进游戏验证（本机暂无 C++ 工作负载），推 CI 或加装 VS 后验证
+- ✅ **inject 核心已实现**：`0x679A15` 注入点探针通过（写入 `[E1]Strength` 被引擎真实采纳），合并逻辑见 `src/Hooks.RulesInject.cpp`——按目标目录注入：`ra2hook\inject\enabled\<rules|ra2md|art|ai|uimd>\*.ini`（目标挂点见 TODO.md），`[Inject] Files=` 显式列表仍可直注 rules，后写覆盖；`ra2hook\inject\mix\*.mix` 注册进引擎文件系统（内置 SHP/VXL/PCX 用）
+- ⬜ **inject 待实测**：rules/ra2md 目录注入与 mix 装载尚未本地编译/进游戏验证（本机暂无 C++ 工作负载），推 CI 或加装 VS 后验证
 - ⬜ 阶段 3：运行时功能（热键改值等）
 
 **下一步：push 触发 CI → 下载 artifact → 把 dll 放进 RA2 目录 → `[Inject] Enabled=yes` + 放一个注入 ini → Syringe 启动 → 看 `ra2hook.log` 的 inject 行与游戏内效果。**

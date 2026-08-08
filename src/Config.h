@@ -31,9 +31,16 @@ namespace Config {
         bool enabled = false;
 
         // 显式注入文件列表（逗号分隔，顺序即注入顺序，后者覆盖前者）。
-        // 留空 = 自动扫描 ra2hook/inject/*.ini（按文件名排序）。
-        // 上限够放一批较长路径；超长会被截断并告警。
+        // 只作用于 rules 目标（与旧版行为一致）。留空 = 自动按目标目录扫描：
+        //   ra2hook/inject/enabled/rules/*.ini   -> INI_Rules
+        //   ra2hook/inject/enabled/ra2md/*.ini   -> INI_RA2MD
+        //   ra2hook/inject/enabled/art|ai|uimd  -> 目标已注册，挂点未定(TODO)
         char files[512] = {};
+
+        // 是否把 ra2hook/inject/mix/*.mix 全部注册进引擎文件系统。
+        // mix 内可放自定义 SHP/VXL/PCX —— 这类资源只被惰性引用，注入时机宽松。
+        // 文件名无约定，目录下所有 *.mix 都会被 new MixFileClass 装载。
+        bool mix = false;
     };
 
     struct Settings {

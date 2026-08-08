@@ -137,6 +137,28 @@ namespace DumpIni {
         return true;
     }
 
+    // uimd：ifWriteMemoryIni 因对象段数为 0 而没产出文件（返回 false），
+    // 引擎读取 uimd.ini 走独立散装读取、不进 INI_UIMD 全局对象。这时在根目录
+    // 原样拷贝引擎正在用的散装 uimd.ini，保证 dump 结果可复用。
+    static void DumpLooseFallbackIfNeeded(const char* fileName)
+    {
+        char full[260] = {};
+        std::snprintf(full, sizeof(full), "%s\\ini\\%s", DumpIO::kDumpRoot, fileName);
+        if (DumpIO::EnsureDirForFile(full)) {
+            if (std::FILE* f = std::fopen(full, "rb")) {   // 内存 dump 已产出
+                std::fclose(f);
+                return;
+            }
+        }
+
+        char rel[260] = {};
+        std::snprintf(rel, sizeof(rel), "ini\\%s", fileName);
+        const int n = DumpIO::CopyEngineFile(fileName, rel);
+        if (n > 0)
+            Log::Info("DumpIni: %-16s <- 内存对象为空，散装文件原样拷贝（%d 字节）",
+                      fileName, n);
+    }
+
     void RunIni()
     {
         Log::Info(" [INI] 导出内存中合并后的对象（标准 md 命名）");
@@ -149,6 +171,9 @@ namespace DumpIni {
         WriteMemoryIni(&CCINIClass::INI_AI,     "aimd.ini");
         WriteMemoryIni(&CCINIClass::INI_UIMD,   "uimd.ini");
         WriteMemoryIni(&CCINIClass::INI_RA2MD,  "ra2md.ini");
+
+        // INI_UIMD 的对象是空的，散装 uimd.ini 才有真实内容——补一颗。
+        DumpLooseFallbackIfNeeded("uimd.ini");
     }
 
     // 尝试导出一个 CSF 文件；若已处理过同名文件则跳过。
