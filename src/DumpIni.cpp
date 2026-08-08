@@ -16,9 +16,11 @@
 #include <CCINIClass.h>
 #include <CCFileClass.h>
 
+#include <windows.h>  // FindFirstFileA / FindNextFileA
+
 #include <cstdio>
 #include <cstdlib>   // malloc / free
-#include <cstring>   // strstr
+#include <cstring>   // strstr / _stricmp
 
 #include "Config.h"
 #include "DumpIO.h"
@@ -151,37 +153,67 @@ namespace DumpIni {
         WriteMemoryIni(&CCINIClass::INI_RA2MD,  "ra2md.ini");
     }
 
+    // 尝试导出一个 CSF 文件；若已处理过同名文件则跳过。
+    // 返回导出的字节数（已存在时重复导出没意义）。
+    static int TryCsf(const char* name, char (&seen)[64][32], int& seenCount)
+    {
+        for (int i = 0; i < seenCount; ++i)
+            if (_stricmp(seen[i], name) == 0)
+                return 0;
+        if (seenCount < 64)
+            std::snprintf(seen[seenCount++], 32, "%s", name);
+
+        char rel[260] = {};
+        std::snprintf(rel, sizeof(rel), "csf\\%s", name);
+        return DumpIO::CopyEngineFile(name, rel);
+    }
+
     void RunCsf()
     {
-        Log::Info(" [CSF] 原样字节拷贝");
+        Log::Info(" [CSF] 自动发现 stringtable*.csf（散装目录 + 数值试探）");
 
         // CSF 没有"内存中合并后的对象"可导，只能按文件名逐个拷。
-        // 覆盖 YR 原版 + MO 已知用到的 stringtable 编号；不存在的会被静默跳过。
-        static const char* kNames[] = {
-            "ra2md.csf",
-            "ra2.csf",
-            "stringtable00.csf", "stringtable01.csf", "stringtable02.csf",
-            "stringtable03.csf", "stringtable04.csf", "stringtable05.csf",
-            "stringtable06.csf", "stringtable07.csf", "stringtable08.csf",
-            "stringtable09.csf", "stringtable10.csf", "stringtable11.csf",
-            "stringtable12.csf", "stringtable13.csf", "stringtable14.csf",
-            // MO 额外使用的 stringtable 编号（游戏中为散装文件，不在 mix 内）。
-            "stringtable33.csf", "stringtable43.csf", "stringtable54.csf",
-            "stringtable55.csf", "stringtable56.csf", "stringtable70.csf",
-            "stringtable77.csf", "stringtable92.csf", "stringtable99.csf",
-        };
+        //
+        // 不硬编码文件名清单（过去 MO 新加的 stringtable 编号全靠手抄，容易漏）：
+        //   1. 扫游戏根目录下真实的 *.csf（散装文件，包括 ra2/ra2md 与
+        //      MO 新增的 stringtable33/43/54/55/56/70/77/92/99 等，文件名随版本变化）；
+        //   2. 对 stringtableNN 再按数值区间试探 NN=0..599——mix 内的编号
+        //      用 CCFileClass 也探测得到（引擎对 mix 内文件同样以名字查找）。
+        // 两路都走 CopyEngineFile —— 原样字节拷贝，覆盖散装与 mix 内两种情况。
 
-        int ok = 0;
-        for (const char* name : kNames) {
-            char rel[260] = {};
-            std::snprintf(rel, sizeof(rel), "csf\\%s", name);
-            const int n = DumpIO::CopyEngineFile(name, rel);
-            if (n > 0) {
-                Log::Info("DumpCsf: %-20s %d 字节", name, n);
-                ++ok;
-            }
+        // 已处理的名字，避免同一文件被两路重复导出。
+        char seen[64][32] = {};
+        int  seenCount = 0;
+
+        int ok = 0, bytes = 0;
+
+        // ── 路 1：游戏根目录散装 *.csf ────────────────────────────────
+        WIN32_FIND_DATAA fd;
+        HANDLE hFind = FindFirstFileA("*.csf", &fd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                const int n = TryCsf(fd.cFileName, seen, seenCount);
+                if (n > 0) { ok += 1; bytes += n; Log::Info("DumpCsf: %-24s %9d 字节", fd.cFileName, n); }
+            } while (FindNextFileA(hFind, &fd));
+            FindClose(hFind);
+        } else {
+            Log::Info(" [CSF] 根目录无散装 *.csf（全部在 mix 内，走数值试探）");
         }
-        Log::Info(" [CSF] 共导出 %d 个文件", ok);
+
+        // ── 路二：stringtableNNNN 数值试探（NN 两位与三位都试）─────────
+        // 两位：00..99；三位：100..599（RA2+MO 实际用到的编号都远小于 600）。
+        // 引擎对不存在的文件返回值即跳过，试探本身零成本。
+        for (int n = 0; n < 600; ++n) {
+            char name[32] = {};
+            if (n < 100)
+                std::snprintf(name, sizeof(name), "stringtable%02d.csf", n);
+            else
+                std::snprintf(name, sizeof(name), "stringtable%03d.csf", n);
+            const int r = TryCsf(name, seen, seenCount);
+            if (r > 0) { ok += 1; bytes += r; Log::Info("DumpCsf: %-24s %9d 字节", name, r); }
+        }
+
+        Log::Info(" [CSF] 共导出 %d 个文件（%d 字节）", ok, bytes);
     }
 
 }  // namespace DumpIni
