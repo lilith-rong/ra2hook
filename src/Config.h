@@ -29,6 +29,11 @@ namespace Config {
 
     struct InjectSettings {
         bool enabled = false;
+
+        // 显式注入文件列表（逗号分隔，顺序即注入顺序，后者覆盖前者）。
+        // 留空 = 自动扫描 ra2hook/inject/*.ini（按文件名排序）。
+        // 上限够放一批较长路径；超长会被截断并告警。
+        char files[512] = {};
     };
 
     struct Settings {

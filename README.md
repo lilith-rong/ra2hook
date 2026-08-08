@@ -81,8 +81,10 @@ FromAresInclude=1
 ## 状态
 
 - ✅ 设计已定（DEVELOPMENT.md v0.2）
-- ✅ 工程文件齐备，**CI 编译通过**（run 30867986599，artifact 含 `ra2hook.dll`）
-- ⬜ 阶段 0 出口：把 dll 放进 RA2 目录，跑出那行探针日志
-- ⬜ 阶段 2：探针为真后写 `MergeFile`（逐键 `WriteString`，后写胜出）
+- ✅ 工程文件齐备，CI 编译通过
+- ✅ **dump 方向已实现**：INI/CSF/VXL/SHP/HVA 导出（`src/DumpIni.cpp` + `src/ArtMap.cpp`），已对真实 MO 数据核对
+- ✅ **inject 核心已实现**：`0x679A15` 注入点探针通过（写入 `[E1]Strength` 被引擎真实采纳），合并逻辑见 `src/Hooks.RulesInject.cpp`——`ra2hook\inject\*.ini`（或 `[Inject] Files=`）逐键并进 rules，后写胜出
+- ⬜ **inject 待实测**：本轮改动尚未本地编译/进游戏验证（本机暂无 C++ 工作负载），推 CI 或加装 VS 后验证
+- ⬜ 阶段 3：运行时功能（热键改值等）
 
-**下一步：从 Actions 页下载 artifact → 放进 RA2 目录 → Syringe 启动 → 看 `ra2hook.log` 里的探针行。**
+**下一步：push 触发 CI → 下载 artifact → 把 dll 放进 RA2 目录 → `[Inject] Enabled=yes` + 放一个注入 ini → Syringe 启动 → 看 `ra2hook.log` 的 inject 行与游戏内效果。**

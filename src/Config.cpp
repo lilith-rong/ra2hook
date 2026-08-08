@@ -6,6 +6,8 @@
 #include <CCINIClass.h>
 #include <CCFileClass.h>
 
+#include <cstring>   // _stricmp
+
 #include "Config.h"
 #include "Logger.h"
 
@@ -16,6 +18,19 @@ namespace Config {
 
     static const char* kFileName = "ra2hook.ini";
 
+    // 直接遍历链表的段查找。引擎的 ReadString/GetKeyCount 对**不存在的段**会
+    // 回退到上一次成功段（CurrentSection），拿它们做存在性检查恒为真；这里与
+    // ArtMap.cpp 保持一致，走链表避免隐藏状态。
+    static INIClass::INISection* FindSection(INIClass* pINI, const char* section)
+    {
+        if (!pINI || !section || !section[0]) return nullptr;
+        for (auto* s = pINI->Sections.First(); s && s->IsValid(); s = s->Next()) {
+            if (s->Name && _stricmp(s->Name, section) == 0)
+                return s;
+        }
+        return nullptr;
+    }
+
     void Load()
     {
         if (s_loaded) return;
@@ -23,7 +38,7 @@ namespace Config {
 
         CCFileClass file(kFileName);
         if (!file.Exists()) {
-            Log::Info("Config: %s 不存在，全部功能保持默认（dump 关闭）", kFileName);
+            Log::Info("Config: %s 不存在，全部功能保持默认（dump/inject 关闭）", kFileName);
             return;
         }
 
@@ -45,7 +60,19 @@ namespace Config {
         // 段回退机制只在读**不存在的段**时才误导。
         ini.ReadString("Dump", "OnlyUnits", "", d.onlyUnits, sizeof(d.onlyUnits));
 
-        s_settings.inject.enabled = ini.ReadBool("Inject", "Enabled", s_settings.inject.enabled);
+        // [Inject]：段可能不存在（默认 ra2hook.ini 里就没有）。若不检查段存在性，
+        // ReadBool/ReadString 会回退到 [Dump] 段，把 OnlyUnits 之类的值误读进来——
+        // Enabled 可能被错误地打开。故先查段，存在才读。
+        s_settings.inject.enabled = false;
+        s_settings.inject.files[0] = '\0';
+        if (FindSection(&ini, "Inject")) {
+            s_settings.inject.enabled = ini.ReadBool("Inject", "Enabled", false);
+            ini.ReadString("Inject", "Files", "", s_settings.inject.files,
+                           sizeof(s_settings.inject.files));
+        } else {
+            Log::Debug("Config: [Inject] 段不存在，inject 保持关闭");
+        }
+
         s_settings.logLevel       = ini.ReadInteger("Log", "Level", s_settings.logLevel);
 
         Log::g_level = static_cast<Log::Level>(s_settings.logLevel);

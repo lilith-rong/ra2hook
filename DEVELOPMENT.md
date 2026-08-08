@@ -430,20 +430,20 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 
 ### 阶段 1:探针
 
-- [ ] Logger（文件输出,带级别）
-- [ ] Config 加载 + schema 校验
-- [ ] 在 `0x679A15` 挂探针,回答待验证清单第 1、2 项
+- [x] Logger（文件输出,带级别）— `src/Logger.h`
+- [x] Config 加载 — `src/Config.cpp`（ra2hook.ini,见 §5）
+- [x] 在 `0x679A15` 挂探针 — 已实测:该点 pINI==INI_Rules,写入 `[E1]Strength=543` 被类型解析采纳（见 `src/Hooks.RulesInject.cpp` 头部注释）
 
-**出口条件**:日志能证明"此点 `CCINIClass` 已含 Ares include 内容",且手工 `WriteString` 一个键能在游戏内看到效果。
+**出口条件**:已达成。此点 CCINIClass 含全部 include 内容,手工 WriteString 能在游戏内生效。
 
 ### 阶段 2:核心注入（最小可用版本）
 
-- [ ] ini 解析器（自己的,不依赖引擎）
-- [ ] `MergeFile`:逐键 `WriteString`,支持 `onConflict`
-- [ ] 合并后 rules 快照 dump
-- [ ] 与 Ares / Phobos 同时加载的共存测试
+- [x] 注入文件读取 — 直接用引擎 CCINIClass 读,不写自带解析器（行为与游戏一致）
+- [x] `MergeFile`:逐键 `WriteString`,后写胜出（`[Inject] Files=` 显式列表优先,否则扫 `ra2hook/inject/*.ini`）
+- [x] 合并后 rules 快照 dump — dump 点在 inject 之后,`rulesmd.ini` dump 即包含注入结果（两者共用 INI_Rules 同一对象)
+- [ ] 与 Ares / Phobos 同时加载的共存测试（依赖本机/游戏环境,尚未跑）
 
-**出口条件**:外部 ini 的改动在游戏内生效,Ares/Phobos 功能不受影响,且与它们的 `[#include]` 互不干扰。
+**出口条件**:外部 ini 的改动在游戏内生效,Ares/Phobos 功能不受影响,且与它们的 `[#include]` 互不干扰。当前实现已就绪,待实测。
 
 ### 阶段 3:运行时功能
 
