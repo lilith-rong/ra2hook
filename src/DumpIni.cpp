@@ -165,6 +165,10 @@ namespace DumpIni {
             "stringtable06.csf", "stringtable07.csf", "stringtable08.csf",
             "stringtable09.csf", "stringtable10.csf", "stringtable11.csf",
             "stringtable12.csf", "stringtable13.csf", "stringtable14.csf",
+            // MO 额外使用的 stringtable 编号（游戏中为散装文件，不在 mix 内）。
+            "stringtable33.csf", "stringtable43.csf", "stringtable54.csf",
+            "stringtable55.csf", "stringtable56.csf", "stringtable70.csf",
+            "stringtable77.csf", "stringtable92.csf", "stringtable99.csf",
         };
 
         int ok = 0;
