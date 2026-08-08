@@ -16,8 +16,6 @@
 #include <CCINIClass.h>
 #include <CCFileClass.h>
 
-#include <windows.h>  // FindFirstFileA / FindNextFileA
-
 #include <cstdio>
 #include <cstdlib>   // malloc / free
 #include <cstring>   // strstr / _stricmp
@@ -170,39 +168,34 @@ namespace DumpIni {
 
     void RunCsf()
     {
-        Log::Info(" [CSF] 自动发现 stringtable*.csf（散装目录 + 数值试探）");
+        Log::Info(" [CSF] 探测引擎实际加载的 CSF 名（ra2/ra2md + stringtable 数值）");
 
         // CSF 没有"内存中合并后的对象"可导，只能按文件名逐个拷。
         //
-        // 不硬编码文件名清单（过去 MO 新加的 stringtable 编号全靠手抄，容易漏）：
-        //   1. 扫游戏根目录下真实的 *.csf（散装文件，包括 ra2/ra2md 与
-        //      MO 新增的 stringtable33/43/54/55/56/70/77/92/99 等，文件名随版本变化）；
-        //   2. 对 stringtableNN 再按数值区间试探 NN=0..599——mix 内的编号
-        //      用 CCFileClass 也探测得到（引擎对 mix 内文件同样以名字查找）。
-        // 两路都走 CopyEngineFile —— 原样字节拷贝，覆盖散装与 mix 内两种情况。
+        // 不硬编码编号清单（过去 MO 新加的 stringtable 编号全靠手抄，容易漏）。
+        // 引擎只会按固定的几种名字形式解析 CSF：
+        //   基本语言文件  ra2.csf / ra2md.csf（散装或 mix 内都可能）
+        //   扩展字符串表 stringtableNNNN.csf（两位/三位数字编号）
+        // 据此全部走 CCFileClass 探测 —— 它同时覆盖散装与 mix 内文件，
+        // 无需再扫描根目录（曾经的「路 1」对引擎可加载的文件是冗余的）。
 
-        // 已处理的名字，避免同一文件被两路重复导出。
+        // 已经处理过的名字，避免两个探测段重复导出同一个文件。
         char seen[64][32] = {};
         int  seenCount = 0;
 
         int ok = 0, bytes = 0;
 
-        // ── 路 1：游戏根目录散装 *.csf ────────────────────────────────
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA("*.csf", &fd);
-        if (hFind != INVALID_HANDLE_VALUE) {
-            do {
-                const int n = TryCsf(fd.cFileName, seen, seenCount);
-                if (n > 0) { ok += 1; bytes += n; Log::Info("DumpCsf: %-24s %9d 字节", fd.cFileName, n); }
-            } while (FindNextFileA(hFind, &fd));
-            FindClose(hFind);
-        } else {
-            Log::Info(" [CSF] 根目录无散装 *.csf（全部在 mix 内，走数值试探）");
+        // ── 路 1：基本语言文件 ────────────────────────────────────────────
+        // ra2/ra2md 是硬名，不匹配后面的 stringtable 编号模式，需单独探测。
+        static const char* kBase[] = { "ra2.csf", "ra2md.csf" };
+        for (const char* name : kBase) {
+            const int n = TryCsf(name, seen, seenCount);
+            if (n > 0) { ok += 1; bytes += n; Log::Info("DumpCsf: %-24s %9d 字节", name, n); }
         }
 
-        // ── 路二：stringtableNNNN 数值试探（NN 两位与三位都试）─────────
+        // ── 路 2：stringtableNNNN 数值试探（NN 两位与三位都试）────────────
         // 两位：00..99；三位：100..599（RA2+MO 实际用到的编号都远小于 600）。
-        // 引擎对不存在的文件返回值即跳过，试探本身零成本。
+        // 引擎对不存在的文件返回 -1 即自然跳过，试探本身零成本。
         for (int n = 0; n < 600; ++n) {
             char name[32] = {};
             if (n < 100)
