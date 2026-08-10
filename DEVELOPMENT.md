@@ -262,7 +262,8 @@ pTarget->WriteString(section, key, value);
 - ✅ 语义完全确定:"后写胜出",正好对应需求里的"在 include 之后加载"
 - ✅ 只依赖已核实的单个 API
 - ✅ 写入方式与引擎自身一致,下游读取者无法区分
-- ❌ 我们的 ini 里不能用 Ares 的 `[#include]` 和 `$Inherits`（可接受:需求就是要独立机制）
+- ✅ inject 文件内可用 ra2hook 私有 `[#include]`:当前文件先合并,再按 include 键顺序深度优先合并引用文件;该段不写入目标对象,不参与 Ares/Phobos 原 include 链
+- ❌ 不复刻 Ares 其他扩展语义（如 `$Inherits`）。需求是独立注入机制,不是复制 Ares INI 处理器
 
 **路线 B:`ReadCCFile` 直接读进目标 `CCINIClass`**
 
@@ -439,7 +440,8 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 ### 阶段 2:核心注入（最小可用版本）
 
 - [x] 注入文件读取 — 直接用引擎 CCINIClass 读,不写自带解析器（行为与游戏一致）
-- [x] `MergeFile`:逐键 `WriteString`,后写胜出（`[Inject] Files=` 显式列表优先,否则扫 `ra2hook/inject/*.ini`）
+- [x] `MergeFile`:逐键 `WriteString`,后写胜出（`[Inject] Files=` 显式列表优先,否则扫 `ra2hook/inject/enabled/<target>/*.ini`）
+- [x] inject 私有 `[#include]` 展开 — 不写入/干扰 Ares/Phobos 原 include 链;路径优先按当前文件目录解析,找不到再走 RA2/引擎文件系统（可引用已注册 mix 内 INI）
 - [x] 合并后 rules 快照 dump — dump 点在 inject 之后,`rulesmd.ini` dump 即包含注入结果（两者共用 INI_Rules 同一对象)
 - [ ] 与 Ares / Phobos 同时加载的共存测试（依赖本机/游戏环境,尚未跑）
 

@@ -5,6 +5,8 @@
 ## 注入（inject）
 
 - [x] 注入目录按目标拆分子目录：`ra2hook/inject/enabled/<rules|ra2md|art|ai|uimd>/*.ini`
+- [x] inject 文件内独立展开 `[#include]`：可用 `enabled/<target>/index.ini`
+      控制加载散装或 mix 内的规则 ini，不写入/干扰 Ares/Phobos 原 include 链。
 - [ ] **art 注入挂点** — 引擎 `INI_Art`（&CCINIClass::INI_Art，0x887180）"类型解析前"挂点未定：
       对象在 rules 窗口可能尚未装载，需先找 `artmd` 独立的加载/消费点，才能把
       `enabled/art/*.ini` 真正并进去。需要 IDA 找 xref。

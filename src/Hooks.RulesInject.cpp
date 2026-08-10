@@ -22,6 +22,10 @@
 //     - art/ai/uimd 挂点未定（对象在此时段可能尚未装载，写进去是无效的），
 //               现阶段标记为「待挂点」，只记日志不注入（见 TODO.md）
 //   显式 Files= 列表（旧版行为）仍保留：全部并进 rules。
+//   inject 文件内的 [#include] 由 ra2hook 自己展开，独立于 Ares/Phobos：
+//     - 不修改原 rules/art 的 [#include] 段
+//     - 不把 inject 文件自己的 [#include] 段写入引擎目标对象
+//     - 先合并当前文件，再按 include 键顺序深度优先合并被引用文件
 //
 // 【mix 装载】ra2hook/inject/mix/*.mix 全部 new MixFileClass 注册进引擎
 //   Mixes 列表（MixFileClass.h:53 全局 MIXes，构造 0x5B3C20）。
@@ -53,6 +57,7 @@ namespace RulesInject {
     static const char* kMixDir     = "ra2hook\\inject\\mix";
     static const int   kMaxFiles   = 256;   // 一个注入目录最多接受的文件数
     static const int   kPathMax    = 260;
+    static const int   kMaxIncludeDepth = 32;
 
     // 每个目标 = { 目录名, 引擎对象名（日志）, 取对象指针，是否已挂载 }
     // 注意 INI_Rules 是 CCINIClass*（指针），其余是 CCINIClass（对象，需取址）。
@@ -81,22 +86,150 @@ namespace RulesInject {
         return n;
     }
 
-    // 把外部 ini 文件逐键并进 pTarget。返回写入键数；文件不存在返回 -1。
-    static int MergeFile(CCINIClass* pTarget, const char* path)
+    static bool IsIncludeSection(const char* name)
     {
-        CCFileClass file(path);
-        if (!file.Exists()) {
-            Log::Warn("inject: 文件不存在 %s，跳过", path);
-            return -1;
+        return name && _stricmp(name, "#include") == 0;
+    }
+
+    static bool IsRootedPath(const char* path)
+    {
+        if (!path || !path[0]) return false;
+        return path[0] == '\\' || path[0] == '/' || (path[0] && path[1] == ':');
+    }
+
+    static void NormalizeSlashes(char* path)
+    {
+        if (!path) return;
+        for (char* p = path; *p; ++p)
+            if (*p == '/') *p = '\\';
+    }
+
+    static void TrimIniValue(const char* src, char* dst, size_t dstSize)
+    {
+        if (!dst || dstSize == 0) return;
+        dst[0] = '\0';
+        if (!src) return;
+
+        while (*src == ' ' || *src == '\t') ++src;
+        const char* end = src + std::strlen(src);
+        while (end > src && (end[-1] == ' ' || end[-1] == '\t' ||
+                             end[-1] == '\r' || end[-1] == '\n'))
+            --end;
+
+        if (end > src + 1 &&
+            ((*src == '"' && end[-1] == '"') || (*src == '\'' && end[-1] == '\''))) {
+            ++src;
+            --end;
         }
 
-        CCINIClass src;
-        src.ReadCCFile(&file);   // 0x4741F0 —— 与 Config.cpp 同款读法
+        const size_t len = static_cast<size_t>(end - src);
+        std::snprintf(dst, dstSize, "%.*s",
+                      static_cast<int>(len < dstSize ? len : dstSize - 1), src);
+        NormalizeSlashes(dst);
+    }
 
-        int keys = 0, sections = 0;
+    static void ParentDirOf(const char* path, char* out, size_t outSize)
+    {
+        if (!out || outSize == 0) return;
+        out[0] = '\0';
+        if (!path || !path[0]) return;
+
+        const char* last = nullptr;
+        for (const char* p = path; *p; ++p) {
+            if (*p == '\\' || *p == '/')
+                last = p;
+        }
+        if (!last) return;
+
+        const size_t len = static_cast<size_t>(last - path);
+        std::snprintf(out, outSize, "%.*s",
+                      static_cast<int>(len < outSize ? len : outSize - 1), path);
+        NormalizeSlashes(out);
+    }
+
+    struct IncludeContext {
+        char stack[kMaxIncludeDepth][kPathMax] = {};
+        int  depth = 0;
+    };
+
+    static bool IsInIncludeStack(const IncludeContext& ctx, const char* path)
+    {
+        for (int i = 0; i < ctx.depth; ++i) {
+            if (_stricmp(ctx.stack[i], path) == 0)
+                return true;
+        }
+        return false;
+    }
+
+    static bool ReadIniResolved(const char* request, const char* baseDir,
+                                CCINIClass& out, char* usedPath)
+    {
+        char name[kPathMax] = {};
+        TrimIniValue(request, name, sizeof(name));
+        if (!name[0]) return false;
+
+        char candidates[2][kPathMax] = {};
+        int n = 0;
+
+        if (baseDir && baseDir[0] && !IsRootedPath(name)) {
+            std::snprintf(candidates[n++], kPathMax, "%s\\%s", baseDir, name);
+            NormalizeSlashes(candidates[n - 1]);
+        }
+
+        std::snprintf(candidates[n++], kPathMax, "%s", name);
+        NormalizeSlashes(candidates[n - 1]);
+
+        for (int i = 0; i < n; ++i) {
+            CCFileClass file(candidates[i]);
+            if (!file.Exists())
+                continue;
+
+            out.ReadCCFile(&file);   // 0x4741F0 —— 与 Config.cpp 同款读法
+            std::snprintf(usedPath, kPathMax, "%s", candidates[i]);
+            return true;
+        }
+
+        return false;
+    }
+
+    static int MergeFileRecursive(CCINIClass* pTarget, const char* path,
+                                  const char* baseDir, IncludeContext& ctx);
+
+    static int MergeIncludes(CCINIClass* pTarget, CCINIClass& src,
+                             const char* currentPath, IncludeContext& ctx)
+    {
+        char baseDir[kPathMax] = {};
+        ParentDirOf(currentPath, baseDir, sizeof(baseDir));
+
+        int total = 0;
+        int includes = 0;
         for (auto* s = src.Sections.First(); s && s->IsValid(); s = s->Next()) {
-            if (!s->Name || !s->Name[0]) continue;
-            ++sections;
+            if (!IsIncludeSection(s->Name)) continue;
+
+            for (auto* n = s->Entries.GenericList::First(); n && n->IsValid(); n = n->Next()) {
+                auto* e = static_cast<INIClass::INIEntry*>(n);
+                if (!e->Key || !e->Key[0] || !e->Value || !e->Value[0]) continue;
+                ++includes;
+                const int keys = MergeFileRecursive(pTarget, e->Value, baseDir, ctx);
+                if (keys > 0)
+                    total += keys;
+            }
+        }
+
+        if (includes > 0)
+            Log::Info("inject: %s 展开 [#include] %d 项，共并进 %d 键",
+                      currentPath, includes, total);
+        return total;
+    }
+
+    static int MergeBody(CCINIClass* pTarget, CCINIClass& src,
+                         const char* path, int& sectionCount)
+    {
+        int keys = 0;
+        sectionCount = 0;
+        for (auto* s = src.Sections.First(); s && s->IsValid(); s = s->Next()) {
+            if (!s->Name || !s->Name[0] || IsIncludeSection(s->Name)) continue;
+            ++sectionCount;
             for (auto* n = s->Entries.GenericList::First(); n && n->IsValid(); n = n->Next()) {
                 auto* e = static_cast<INIClass::INIEntry*>(n);
                 if (!e->Key || !e->Key[0]) continue;
@@ -105,8 +238,57 @@ namespace RulesInject {
             }
         }
 
-        Log::Info("inject: 并进 %s（%d 段 %d 键）", path, sections, keys);
+        Log::Info("inject: 并进 %s（%d 段 %d 键）", path, sectionCount, keys);
         return keys;
+    }
+
+    // 把外部 ini 文件逐键并进 pTarget，并展开该文件自己的 [#include]。
+    // 返回写入键数；文件不存在返回 -1。
+    static int MergeFileRecursive(CCINIClass* pTarget, const char* path,
+                                  const char* baseDir, IncludeContext& ctx)
+    {
+        if (!pTarget || !path || !path[0]) return -1;
+        if (ctx.depth >= kMaxIncludeDepth) {
+            Log::Warn("inject: [#include] 深度超过 %d，跳过 %s",
+                      kMaxIncludeDepth, path);
+            return -1;
+        }
+
+        CCINIClass src;
+        char usedPath[kPathMax] = {};
+        if (!ReadIniResolved(path, baseDir, src, usedPath)) {
+            Log::Warn("inject: 文件不存在 %s，跳过", path);
+            return -1;
+        }
+
+        if (IsInIncludeStack(ctx, usedPath)) {
+            Log::Warn("inject: 检测到 [#include] 循环引用 %s，跳过", usedPath);
+            return -1;
+        }
+
+        std::snprintf(ctx.stack[ctx.depth++], kPathMax, "%s", usedPath);
+
+        int sections = 0;
+        int keys = MergeBody(pTarget, src, usedPath, sections);
+        const int includeKeys = MergeIncludes(pTarget, src, usedPath, ctx);
+
+        --ctx.depth;
+        return keys + (includeKeys > 0 ? includeKeys : 0);
+    }
+
+    static int MergeFile(CCINIClass* pTarget, const char* path)
+    {
+        IncludeContext ctx;
+        return MergeFileRecursive(pTarget, path, nullptr, ctx);
+    }
+
+    static bool FileExistsInEngineFS(const char* path)
+    {
+        CCFileClass file(path);
+        if (!file.Exists()) {
+            return false;
+        }
+        return true;
     }
 
     // 扫描目录里的通配文件，按文件名排序，返回数量。
@@ -230,8 +412,7 @@ namespace RulesInject {
             // MixFileClass 构造函数会把自身链入全局 Mixes 列表（0x5B3C20）。
             // 用 GameCreate 走引擎分配器,避免 DLL 池与游戏池混用导致释放错乱
             // （Memory.h 顶部注释:引擎类必须配引擎的 operator new）。
-            CCFileClass probe(found[i]);
-            if (!probe.Exists()) {
+            if (!FileExistsInEngineFS(found[i])) {
                 Log::Warn("inject: mix 文件不存在 %s，跳过", found[i]);
                 continue;
             }
@@ -258,6 +439,9 @@ namespace RulesInject {
         Log::Info("inject @0x679A15: pINI=%p [General]=%d Keys",
                   (void*)pINI, pINI->GetKeyCount("General"));
 
+        if (Config::Get().inject.mix)
+            InjectMix();
+
         // 显式 Files= 列表（旧版语义）优先，否则按目标目录注入。
         if (Config::Get().inject.files[0]) {
             InjectExplicit(CCINIClass::INI_Rules);
@@ -267,9 +451,6 @@ namespace RulesInject {
                 total += InjectTarget(kTargets[i]);
             Log::Info("inject: 目标目录注入完成，共 %d 键", total);
         }
-
-        if (Config::Get().inject.mix)
-            InjectMix();
     }
 
 }  // namespace RulesInject
