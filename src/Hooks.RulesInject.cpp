@@ -109,9 +109,9 @@ namespace RulesInject {
         }
 
         if (stats.warnings > 0) {
-            Log::Warn("inject: %s skipped %d include issue(s): %s",
+            Log::Warn("inject: %s encountered %d recoverable issue(s): %s",
                       path, stats.warnings,
-                      stats.firstWarning[0] ? stats.firstWarning : "include failure");
+                      stats.firstWarning[0] ? stats.firstWarning : "ignored INI issue");
         }
 
         IniOverlay::Copy(pTarget, &staging);

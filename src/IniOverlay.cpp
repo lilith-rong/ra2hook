@@ -67,6 +67,64 @@ namespace {
         }
     }
 
+    size_t IniWhitespaceWidth(const char* p, const char* end)
+    {
+        if (!p || p >= end) return 0;
+        if (*p == ' ' || *p == '\t') return 1;
+
+        const auto* bytes = reinterpret_cast<const unsigned char*>(p);
+        const size_t remaining = static_cast<size_t>(end - p);
+        if (remaining >= 3 && bytes[0] == 0xE3 && bytes[1] == 0x80 &&
+            bytes[2] == 0x80) {
+            return 3;  // UTF-8 U+3000 IDEOGRAPHIC SPACE
+        }
+        if (remaining >= 2 && bytes[0] == 0xA1 && bytes[1] == 0xA1) {
+            return 2;  // GBK full-width space
+        }
+        return 0;
+    }
+
+    bool EndsWithIniWhitespace(const char* begin, const char* end, size_t* width)
+    {
+        if (!begin || !end || end <= begin || !width) return false;
+        if (end[-1] == ' ' || end[-1] == '\t') {
+            *width = 1;
+            return true;
+        }
+
+        const auto* bytes = reinterpret_cast<const unsigned char*>(end);
+        if (end - begin >= 3 && bytes[-3] == 0xE3 && bytes[-2] == 0x80 &&
+            bytes[-1] == 0x80) {
+            *width = 3;
+            return true;
+        }
+        if (end - begin >= 2 && bytes[-2] == 0xA1 && bytes[-1] == 0xA1) {
+            *width = 2;
+            return true;
+        }
+        return false;
+    }
+
+    bool IsIniCommentMarker(const char* p, const char* end)
+    {
+        if (!p || p >= end) return false;
+        if (*p == ';' || *p == '#') return true;
+
+        const auto* bytes = reinterpret_cast<const unsigned char*>(p);
+        const size_t remaining = static_cast<size_t>(end - p);
+        return (remaining >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBC &&
+                (bytes[2] == 0x9B || bytes[2] == 0x83)) ||
+               (remaining >= 2 && bytes[0] == 0xA3 &&
+                (bytes[1] == 0xBB || bytes[1] == 0xA3));
+    }
+
+    void TrimIniSpan(const char*& begin, const char*& end)
+    {
+        size_t width = 0;
+        while ((width = IniWhitespaceWidth(begin, end)) != 0) begin += width;
+        while (EndsWithIniWhitespace(begin, end, &width)) end -= width;
+    }
+
     bool CopyTrimmedSpan(const char* begin, const char* end,
                          char* dst, size_t dstSize, bool stripQuotes)
     {
@@ -74,11 +132,8 @@ namespace {
         dst[0] = '\0';
         if (!begin || !end || end < begin) return false;
 
-        while (begin < end && (*begin == ' ' || *begin == '\t')) ++begin;
-        while (end > begin && (end[-1] == ' ' || end[-1] == '\t' ||
-                               end[-1] == '\r' || end[-1] == '\n')) {
-            --end;
-        }
+        while (end > begin && (end[-1] == '\r' || end[-1] == '\n')) --end;
+        TrimIniSpan(begin, end);
 
         if (stripQuotes && end > begin + 1 &&
             ((*begin == '"' && end[-1] == '"') ||
@@ -97,11 +152,8 @@ namespace {
     char* DuplicateTrimmedSpan(const char* begin, const char* end)
     {
         if (!begin || !end || end < begin) return nullptr;
-        while (begin < end && (*begin == ' ' || *begin == '\t')) ++begin;
-        while (end > begin && (end[-1] == ' ' || end[-1] == '\t' ||
-                               end[-1] == '\r' || end[-1] == '\n')) {
-            --end;
-        }
+        while (end > begin && (end[-1] == '\r' || end[-1] == '\n')) --end;
+        TrimIniSpan(begin, end);
 
         const size_t len = static_cast<size_t>(end - begin);
         char* value = static_cast<char*>(std::malloc(len + 1));
@@ -109,6 +161,27 @@ namespace {
         std::memcpy(value, begin, len);
         value[len] = '\0';
         return value;
+    }
+
+    bool ParseSectionHeader(const char* begin, const char* end,
+                            char* section, size_t sectionSize)
+    {
+        if (!begin || !end || begin >= end || *begin != '[' ||
+            !section || sectionSize == 0) {
+            return false;
+        }
+
+        const char* close = begin + 1;
+        while (close < end && *close != ']') ++close;
+        if (close >= end) return false;
+
+        const char* trailing = close + 1;
+        size_t width = 0;
+        while ((width = IniWhitespaceWidth(trailing, end)) != 0) trailing += width;
+        if (trailing < end && !IsIniCommentMarker(trailing, end)) return false;
+
+        return CopyTrimmedSpan(begin + 1, close, section, sectionSize, false) &&
+               section[0];
     }
 
     void ParentDirOf(const char* path, char* out, size_t outSize)
@@ -259,44 +332,35 @@ namespace {
             while (lineEnd < end && *lineEnd != '\r' && *lineEnd != '\n') ++lineEnd;
 
             const char* begin = p;
-            while (begin < lineEnd && (*begin == ' ' || *begin == '\t')) ++begin;
             const char* trimmedEnd = lineEnd;
-            while (trimmedEnd > begin &&
-                   (trimmedEnd[-1] == ' ' || trimmedEnd[-1] == '\t')) {
-                --trimmedEnd;
-            }
+            TrimIniSpan(begin, trimmedEnd);
 
-            if (begin < trimmedEnd && *begin != ';' && *begin != '#') {
+            if (begin < trimmedEnd && !IsIniCommentMarker(begin, trimmedEnd)) {
                 if (*begin == '[') {
-                    const char* close = begin + 1;
-                    while (close < trimmedEnd && *close != ']') ++close;
-                    const char* trailing = close < trimmedEnd ? close + 1 : trimmedEnd;
-                    while (trailing < trimmedEnd &&
-                           (*trailing == ' ' || *trailing == '\t')) {
-                        ++trailing;
-                    }
-                    const bool validTrailing = trailing == trimmedEnd ||
-                                               *trailing == ';' || *trailing == '#';
-                    if (close < trimmedEnd && validTrailing &&
-                        CopyTrimmedSpan(begin + 1, close,
-                                        section, sizeof(section), false) && section[0]) {
-                    } else {
+                    if (!ParseSectionHeader(begin, trimmedEnd,
+                                            section, sizeof(section))) {
                         section[0] = '\0';
-                        RecordError(ctx.stats, "%s:%d invalid section", path, lineNumber);
-                        valid = false;
+                        RecordWarning(ctx.stats, "%s:%d ignored invalid section",
+                                      path, lineNumber);
+                        Log::Warn("%s: ignored invalid section %s:%d",
+                                  Tag(ctx.logTag), path, lineNumber);
                     }
                 } else {
                     const char* equal = begin;
                     while (equal < trimmedEnd && *equal != '=') ++equal;
                     if (equal >= trimmedEnd || !section[0]) {
-                        RecordError(ctx.stats, "%s:%d key outside section or missing '='",
-                                    path, lineNumber);
-                        valid = false;
+                        RecordWarning(ctx.stats,
+                                      "%s:%d ignored text outside section or missing '='",
+                                      path, lineNumber);
+                        Log::Warn("%s: ignored text outside section or missing '=' %s:%d",
+                                  Tag(ctx.logTag), path, lineNumber);
                     } else {
                         char key[kIniTokenMax] = {};
                         if (!CopyTrimmedSpan(begin, equal, key, sizeof(key), false) || !key[0]) {
-                            RecordError(ctx.stats, "%s:%d invalid key", path, lineNumber);
-                            valid = false;
+                            RecordWarning(ctx.stats, "%s:%d ignored invalid key",
+                                          path, lineNumber);
+                            Log::Warn("%s: ignored invalid key %s:%d",
+                                      Tag(ctx.logTag), path, lineNumber);
                         } else {
                             char* value = DuplicateTrimmedSpan(equal + 1, trimmedEnd);
                             if (!value) {
@@ -347,17 +411,15 @@ namespace {
             while (lineEnd < end && *lineEnd != '\r' && *lineEnd != '\n') ++lineEnd;
 
             const char* begin = p;
-            while (begin < lineEnd && (*begin == ' ' || *begin == '\t')) ++begin;
             const char* trimmedEnd = lineEnd;
-            while (trimmedEnd > begin &&
-                   (trimmedEnd[-1] == ' ' || trimmedEnd[-1] == '\t')) {
-                --trimmedEnd;
-            }
+            TrimIniSpan(begin, trimmedEnd);
 
-            if (begin < trimmedEnd && *begin != ';' && *begin != '#') {
-                if (*begin == '[' && trimmedEnd[-1] == ']') {
-                    CopyTrimmedSpan(begin + 1, trimmedEnd - 1,
-                                    section, sizeof(section), false);
+            if (begin < trimmedEnd && !IsIniCommentMarker(begin, trimmedEnd)) {
+                if (*begin == '[') {
+                    if (!ParseSectionHeader(begin, trimmedEnd,
+                                            section, sizeof(section))) {
+                        section[0] = '\0';
+                    }
                 } else if (IsIncludeSection(section)) {
                     const char* equal = begin;
                     while (equal < trimmedEnd && *equal != '=') ++equal;
@@ -375,7 +437,8 @@ namespace {
                 }
             }
 
-            while (lineEnd < end && (*lineEnd == '\r' || *lineEnd == '\n')) ++lineEnd;
+            if (lineEnd < end && *lineEnd == '\r') ++lineEnd;
+            if (lineEnd < end && *lineEnd == '\n') ++lineEnd;
             p = lineEnd;
         }
 

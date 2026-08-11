@@ -32,8 +32,8 @@ namespace IniOverlay {
     int MergeFile(CCINIClass* pTarget, const char* path, MergeStats* stats,
                   const char* logTag);
 
-    // An empty directory is a valid empty overlay. Parse/read/include failures
-    // are reported through stats and make the return value false.
+    // An empty directory is a valid empty overlay. Fatal read/parse failures
+    // make the return value false; recoverable syntax/include issues are warnings.
     bool MergeDirectory(CCINIClass* pTarget, const char* dir,
                         MergeStats* stats, const char* logTag);
 
