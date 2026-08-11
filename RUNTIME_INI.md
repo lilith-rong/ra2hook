@@ -91,7 +91,8 @@ restart. The UI can pause/resume `AutoApply` for the current process.
 
 Files in `Directory` are merged by case-insensitive filename order. The shared
 `IniOverlay` parser supports the same private `[#include]` behavior as startup
-inject: current body first, then include entries in source order, later values
+inject: current body first, then include entries in source order (including
+repeated `+=file.ini` keys), later values
 winning. Include cycles, missing files, malformed lines, and depth over 32 reject
 the reload transaction. Startup inject also stages each source file before copying
 it to an engine INI, so a failed include tree cannot leave a half-merged file.

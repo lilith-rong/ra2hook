@@ -35,7 +35,7 @@ namespace Config {
         //   ra2hook/inject/enabled/rules/*.ini   -> INI_Rules
         //   ra2hook/inject/enabled/ra2md/*.ini   -> INI_RA2MD
         //   ra2hook/inject/enabled/art|ai|uimd  -> 目标已注册（挂点见 Hooks.RulesInject.cpp）
-        //   ra2hook/inject/enabled/sound/*.ini  -> 栈上局部 SOUNDMD CCINIClass（0x52C796）
+        //   ra2hook/inject/enabled/sound/*.ini -> SOUNDMD 两阶段覆盖（0x52C6C4/0x7510F6）
         // 每个目录内按文件名（不区分大小写）排序，后写覆盖前写。
         char files[512] = {};
 

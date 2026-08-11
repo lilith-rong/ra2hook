@@ -214,9 +214,9 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 
 - `Files=` 非空时，按逗号分隔的顺序逐个合并到 `INI_Rules`；后一个文件覆盖前一个文件的同名 `section/key`。
 - `Files=` 为空时，扫描 `enabled/<target>/*.ini`；每个目标目录按文件名不区分大小写排序后逐个合并。
-- 每个文件先合并自身正文，再按 `[#include]` 段中的键顺序深度优先合并引用文件；引用文件后写，因此覆盖当前文件。
+- 每个文件先合并自身正文，再按 `[#include]` 段中的出现顺序深度优先合并引用文件；重复键也保留，故 Ares 常用的多行 `+=文件.ini` 可作为私有 include 入口。引用文件后写，因此覆盖当前文件。
 - 推荐把 `enabled/<target>` 只作为入口目录，真正的可选规则放在 mix 或其他目录中由 `index.ini` 引用；否则同一个文件既会被目录扫描又会被 include，可能被重复写入。
-- include 路径先相对当前散装文件目录解析，再按游戏/MIX 文件系统解析。mix 会在每个目标首次注入前注册，因此较早的 `ai/uimd/sound` 挂点也能引用 mix 内 INI。循环引用和超过 32 层的链会被跳过并写日志。
+- include 路径先相对当前散装文件目录解析，再按游戏/MIX 文件系统解析。mix 会在每个目标首次注入前注册，因此较早的 `sound/ai/uimd` 挂点也能引用 mix 内 INI。循环引用和超过 32 层的链会被跳过并写日志。
 - 注入文件支持普通 `section/key=value` 语法。Ares/Phobos 的 `$Inherits` 等扩展语义不会在私有链中自动复制。
 
 ### 9.2 目标和冲突边界
@@ -224,8 +224,34 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 本次对实际游戏目录中的 `Ares.dll`、`Phobos.dll` 和旧版 `ra2hook.dll` 做了地址区间检查：
 `Ares.dll` 与 `Phobos.dll` 共同占用 `0x679A15..0x679A1A`（6 字节），也共同占用
 `0x5FACDF..0x5FACE3`（5 字节）；没有发现它们占用 `0x679A1B`、`0x52D37D`、
-`0x53531A`、`0x52C796` 或 `0x668F6A`。这说明当前候选点没有直接字节区间重叠，
-但不能代替读取时序和最终功能测试。
+`0x53531A`、`0x52C6C4`、`0x7510F6` 或 `0x668F6A`。Ares、Phobos、IHCore 的
+Syringe hook 元数据也没有覆盖新的两个 sound 点。这只能说明没有直接字节区间重叠，
+不能单独证明 SyringeIH 重放指令后的寄存器和控制流安全。
+
+2026-08-11 在目标 MD5 `56D582A1D6F3C144D3ADC867D7A4D91B`、Ares 3.0p1 +
+Phobos Build #47+6_0 下依次否决了三个点，均会触发 `C0000005`，即使 sound
+目录为空也一样：
+
+- `0x52C796`：相对 `call sub_7510D0`，不能依赖 SyringeIH 安全重放；
+- `0x52C78F`：`lea ecx,[esp+12Ch]`，被盗指令依赖原始 ESP；
+- `0x7510D0`：函数入口 `sub esp,824h`，被盗指令直接修改 ESP。
+
+当前方案改为两阶段：
+
+1. `0x52C6C4` 覆盖完整 5 字节 `mov eax,dword ptr [88730Ch]`。此时尚未打开
+   SOUNDMD.INI，handler 在这里执行 `Config::Load()`、注册 MIX，并把
+   `enabled/sound/*.ini` 及私有 include 合并到引擎分配的持久 `CCINIClass`。
+2. `0x7510F6` 覆盖完整 5 字节 `mov dword ptr [B1D3A4h],eax`。前一条
+   `0x7510F4 mov ecx,edi` 已令 `ECX` 指向 SOUNDMD 对象；handler 只校验 vtable
+   `0x7E1AF4` 并复制预备覆盖层，不再读取配置或文件。第一处 `[Defaults]` 查询在
+   `0x751114`，所以复制仍发生在声音配置消费之前。
+
+二进制探针已把预加载 handler 临时放到 `0x52C6C4`，把声音 handler 放到
+`0x7510F6`。游戏启动 60 秒后 launcher 和 game 进程都存活，日志取得 SOUNDMD
+对象 `001AA660`。这只验证了空目录下两个 hook 的控制流和对象寄存器；当次异常日志的
+时间存在旧失败探针延迟写入的歧义，且实际 sound 键尚未验证。因此仍要用正式 Action
+产物重复干净启动和功能测试。源码使用新导出名，游戏目录 `Syringe.json` 中遗留的
+`RA2Hook_SoundInject` 禁用项不会禁用新 hook。
 
 | 目标目录 | 当前注入对象/时机 | 原生引擎 | Ares/Phobos 影响与限制 |
 |---|---|---|---|
@@ -234,7 +260,7 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 | `ra2md` | 同 `0x679A1B`，全局 `INI_RA2MD` | 后续引擎读取可能生效 | Phobos 在 `0x5FACDF` 的启动配置读取早于此点；不能用该目录可靠覆盖 `[Phobos]` 启动配置 |
 | `ai` | `0x52D37D`，AIMD 读入 `INI_AI` 后 | AI 数据消费前可生效 | 当前未发现 Ares/Phobos 对该全局对象的直接读取；仍需实机验证 |
 | `uimd` | `0x53531A`，写入全局 `INI_UIMD` | 可能影响原生后续 UI 读取 | Ares/Phobos 会重新打开 `uimd.ini` 到局部对象；该目录不能可靠覆盖它们自己的 UISettings |
-| `sound` | `0x52C796`，写入 SOUNDMD 栈上局部对象 | `[Defaults]`/`[SoundList]` 原生解析前可生效 | 当前未发现 Ares/Phobos 对该局部对象的直接读取；仍需验证 sound 条目语义 |
+| `sound` | `0x52C6C4` 预备覆盖层，`0x7510F6` 由 `ECX` 写入 SOUNDMD 局部对象 | `[Defaults]`/`[SoundList]` 原生解析前可生效 | 空目录二进制探针已存活 60 秒；正式构建、实际键和连续启动仍待验证 |
 | `eva` / `theme` | 当前没有目标目录或 hook | 不支持 | 当前不注入 `evamd.ini`、`thememd.ini`；需要另找装载完成后的对象/消费点 |
 
 ### 9.3 MIX 资源冲突
@@ -254,5 +280,10 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 5. Ares/Phobos 原 include 和主要功能未受影响；
 6. 散装 INI 与 mix 内 INI 两种来源都通过；
 7. 完成测试后再把 `0x679A1B` 从“静态分析通过、实机待验证”改为“实机已验证”。
+
+sound 还需单独确认：日志先出现 `inject prepare @0x52C6C4`，再出现
+`inject apply @0x7510F6`；连续启动无新异常；测试声音能播放；`[Defaults]` 覆盖和
+新增 `[SoundList]` 条目都被 `sub_7510D0` 采纳。还需分别测试多个入口 INI、重复
+`+=` include，以及引用 MIX 内唯一命名 INI 的情况。
 
 在这些测试完成前，应把 `0x679A1B` 标记为“静态分析通过、实机待验证”，不要写成已验证挂点。

@@ -23,10 +23,11 @@
 //               → 独立挂点 0x52D37D（装载完成后立即注入，早于 AI 读取）
 //     - uimd   UIMD.INI 于 sub_534FA0 0x535311 读进 INI_UIMD
 //               → 独立挂点 0x53531A（装载完成后、数据读取 0x53533d 之前）
-//     - sound  SOUNDMD.INI 于 sub_52BA60 0x52C763 读进**栈上局部** CCINIClass
-//              （v72，非全局）。0x52C796 call sub_7510D0 时 ECX = &v72，
-//              独立挂点 0x52C796（5 字节 call 整条覆盖，返回 0 时框架恢复
-//              原 call，让引擎继续解析 [SoundList]/[Defaults]）。
+//     - sound  使用两个独立挂点。0x52C6C4 在打开 SOUNDMD.INI 前预读配置、注册
+//              MIX，并把 enabled/sound 合并到持久内存对象；0x7510F6 在
+//              sub_7510D0 内取得 ECX=SOUNDMD 对象，只把预备内容复制进去。
+//              旧 0x52C796（relative call）、0x52C78F（ESP-relative lea）和
+//              0x7510D0（修改 ESP）均已实测会在 SyringeIH 下崩溃，不能使用。
 //   InjectTarget 用「目标对象段数>0」作守卫：若某个对象尚未装载（或装载失败
 //   后段数为 0）则跳过，避免写进无效对象。
 //   显式 Files= 列表（旧版行为）仍保留：全部并进 rules。
@@ -65,8 +66,10 @@ namespace RulesInject {
     static bool s_done = false;    // 主钩子幂等（0x679A1B）：读档 / 重开局可能重入
     static bool s_ai_done = false;    // ai 钩子（0x52D37D）幂等
     static bool s_uimd_done = false;  // uimd 钩子（0x53531A）幂等
-    static bool s_sound_done = false; // sound 钩子（0x52C796）幂等
-    static bool s_mix_done = false;   // mix 注册幂等；ai/uimd/sound 可能早于主钩子
+    static bool s_sound_prepare_done = false; // 0x52C6C4：文件 I/O 阶段幂等
+    static bool s_sound_apply_done = false;   // 0x7510F6：内存应用阶段幂等
+    static bool s_mix_done = false;   // mix 注册幂等；sound/ai/uimd 可能早于主钩子
+    static CCINIClass* s_sound_overlay = nullptr; // 引擎分配，进程结束前有意保留
 
     static const char* kInjectRoot = "ra2hook\\inject";
     static const char* kMixDir     = "ra2hook\\inject\\mix";
@@ -326,16 +329,13 @@ namespace RulesInject {
         InjectTarget(kTargets[4]);   // uimd
     }
 
-    // sound 钩子 0x52C796：SOUNDMD.INI 已于 0x52C763 读进栈上局部 CCINIClass
-    // （sub_52BA60 内 v72），随后 0x52C796 call sub_7510D0 解析 [Defaults]/
-    // [SoundList]。此处 ECX = &v72（0x52C78F lea ecx,[esp+..var_2E14] 刚设置，
-    // 未被打乱），直接注入该对象即可在引擎解析前写入定制键。
-    // 与全局对象不同，v72 是栈临时对象，无法放进 kTargets（get 取不到），
-    // 故单独实现、由钩子把指针传进来。
-    static void ApplySound(CCINIClass* pSoundIni)
+    // 0x52C6C4 位于打开 SOUNDMD.INI 之前。配置读取、MIX 注册、目录扫描和
+    // include 展开必须全部在这里完成；在 sub_7510D0 内做这些操作会重入
+    // Ares 的 INI 解析链。
+    static void PrepareSound()
     {
-        if (s_sound_done) return;
-        s_sound_done = true;
+        if (s_sound_prepare_done) return;
+        s_sound_prepare_done = true;
 
         Config::Load();
         if (!Config::Get().inject.enabled) return;
@@ -344,40 +344,58 @@ namespace RulesInject {
         if (Config::Get().inject.mix)
             InjectMix();
 
-        if (!pSoundIni) {
-            Log::Warn("inject @0x52C796: 局部 SOUNDMD CCINIClass 为 null，跳过");
-            return;
-        }
-        if (CountSections(pSoundIni) <= 0) {
-            Log::Warn("inject @0x52C796: 局部 SOUNDMD 对象段数 <=0，跳过");
-            return;
-        }
-
-        Log::Info("inject @0x52C796: SOUNDMD.INI 装载完成，注入局部 CCINIClass %p",
-                  (void*)pSoundIni);
-
         char dir[kPathMax] = {};
         std::snprintf(dir, sizeof(dir), "%s\\enabled\\sound", kInjectRoot);
 
-        char found[kMaxFiles][kPathMax] = {};
-        const int n = ScanDir(dir, "*.ini", found);
-        if (n < 0) {
-            Log::Warn("inject: 无法完整扫描目录 %s，跳过", dir);
-            return;
-        }
-        if (n == 0) {
-            Log::Info("inject: 目录 %s 无 ini（空），跳过", dir);
+        CCINIClass staging;
+        IniOverlay::MergeStats stats;
+        if (!IniOverlay::MergeDirectory(&staging, dir, &stats, "inject.sound")) {
+            Log::Warn("inject prepare @0x52C6C4: SOUNDMD 覆盖层构建失败，整层跳过：%s",
+                      stats.firstError[0] ? stats.firstError : "read/parse failure");
             return;
         }
 
-        int total = 0;
-        for (int i = 0; i < n; ++i) {
-            const int k = MergeFile(pSoundIni, found[i]);
-            if (k < 0) continue;
-            total += k;
+        const int sections = CountSections(&staging);
+        if (sections <= 0) {
+            Log::Info("inject prepare @0x52C6C4: 目录 %s 无可应用内容", dir);
+            return;
         }
 
-        Log::Info("inject: soundmd <- %s（%d 文件，%d 键）", dir, n, total);
+        s_sound_overlay = GameCreate<CCINIClass>();
+        IniOverlay::Copy(s_sound_overlay, &staging);
+        Log::Info("inject prepare @0x52C6C4: SOUNDMD 覆盖层已就绪（%d 文件，%d 段，%d 键）",
+                  stats.files, sections, stats.keys);
+    }
+
+    // 0x7510F6 位于 sub_7510D0 内，0x7510F4 已执行 mov ecx,edi，因此 ECX
+    // 是完成原始 SOUNDMD.INI 装载的局部 CCINIClass。这里只做内存复制，随后
+    // 原函数从 0x751114 开始读取 [Defaults]，之后再处理 [SoundList]。
+    static void ApplyPreparedSound(CCINIClass* pSoundIni)
+    {
+        if (s_sound_apply_done) return;
+        s_sound_apply_done = true;
+
+        if (!s_sound_prepare_done) {
+            Log::Warn("inject apply @0x7510F6: SOUNDMD 覆盖层尚未预备，跳过");
+            return;
+        }
+        if (!s_sound_overlay) return;
+
+        if (!pSoundIni) {
+            Log::Warn("inject apply @0x7510F6: SOUNDMD CCINIClass 为 null，跳过");
+            return;
+        }
+        const DWORD vtable = *reinterpret_cast<const DWORD*>(pSoundIni);
+        if (vtable != 0x7E1AF4u) {
+            Log::Warn("inject apply @0x7510F6: SOUNDMD 对象 vtable=%08X（期望 007E1AF4），跳过",
+                      static_cast<unsigned int>(vtable));
+            return;
+        }
+
+        const int before = CountSections(pSoundIni);
+        IniOverlay::Copy(pSoundIni, s_sound_overlay);
+        Log::Info("inject apply @0x7510F6: SOUNDMD 覆盖已应用到 %p（段数 %d->%d）",
+                  static_cast<void*>(pSoundIni), before, CountSections(pSoundIni));
     }
 
 }  // namespace RulesInject
@@ -405,13 +423,19 @@ DEFINE_HOOK(0x53531A, RA2Hook_UimdInject, 0x5)
     return 0;
 }
 
-// SOUNDMD.INI 读入栈上局部 CCINIClass 后（sub_52BA60, 0x52c763 call
-// sub_4741F0 成功分支），0x52C796 call sub_7510D0 之前。此刻 ECX = &v72
-// （0x52C78F lea ecx,[esp+..var_2E14] 刚设置）。挂钩点恰好是 5 字节 call，
-// 钩子框架整体保存/恢复，返回 0 后原 call 照常执行（引擎解析 [SoundList]）。
-DEFINE_HOOK(0x52C796, RA2Hook_SoundInject, 0x5)
+// 原始指令：mov eax,dword ptr [88730Ch]。此时尚未打开 SOUNDMD.INI，适合
+// 完成所有可能重入 INI 解析器的预备工作。
+DEFINE_HOOK(0x52C6C4, RA2Hook_SoundOverlay_Prepare, 0x5)
+{
+    RulesInject::PrepareSound();
+    return 0;
+}
+
+// 原始指令：mov dword ptr [B1D3A4h],eax；0x7510F4 已设置 ECX=EDI，EDI 是
+// SOUNDMD CCINIClass。该点不覆盖 relative call、ESP-relative 指令或栈调整。
+DEFINE_HOOK(0x7510F6, RA2Hook_SoundOverlay_Apply, 0x5)
 {
     GET(CCINIClass*, pSoundIni, ECX);
-    RulesInject::ApplySound(pSoundIni);
+    RulesInject::ApplyPreparedSound(pSoundIni);
     return 0;
 }

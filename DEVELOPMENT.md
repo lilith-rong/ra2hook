@@ -268,7 +268,7 @@ pTarget->WriteString(section, key, value);
 - ✅ 写入方式与引擎自身一致,下游读取者无法区分
 - ✅ 原始字节通过 `CCFileClass` 获取，仍支持散装文件和已注册 MIX 内文件
 - ✅ 不调用 `CCINIClass::ReadCCFile`，不会被 Ares 的原生 include hook 重复展开
-- ✅ inject 文件内可用 ra2hook 私有 `[#include]`:当前文件先合并,再按 include 键顺序深度优先合并引用文件;该段不写入目标对象,不参与 Ares/Phobos 原 include 链
+- ✅ inject 文件内可用 ra2hook 私有 `[#include]`:当前文件先合并,再按 include 出现顺序深度优先合并引用文件；重复的 `+=文件.ini` 会保留；该段不写入目标对象,不参与 Ares/Phobos 原 include 链
 - ❌ 不复刻 Ares 其他扩展语义（如 `$Inherits`）。需求是独立注入机制,不是复制 Ares INI 处理器
 
 **路线 B:`ReadCCFile` 直接读进目标 `CCINIClass`**

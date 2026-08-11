@@ -21,14 +21,16 @@
 - [x] **uimd 注入挂点** — `INI_UIMD`（0x887208）：UIMD.INI 在 `sub_534FA0`
       0x535311 读进 INI_UIMD，独立挂点 **0x53531A**（5 字节 mov，装载完成后、
       sub_674650 读取 0x53533d 之前注入）。
-- [x] **sound 注入** — `soundmd` 在 `sub_52BA60` 内读进**栈上局部** CCINIClass（非全局，
-      0x52c763 ReadCCFile），独立挂点 **0x52C796**（5 字节 call sub_7510D0，此时
-      ECX = &v72）。返回 0 后原 call 照常执行引擎的 [SoundList]/[Defaults] 解析。
-      注入目录 `ra2hook/inject/enabled/sound/*.ini`（此文件中 [SoundList] 段写入
-      局部对象后会被引擎采纳）。
+- [x] **sound 两阶段注入已实现** — `0x52C796`（relative call）、`0x52C78F`
+      （ESP-relative lea）和 `0x7510D0`（修改 ESP）均已被实机崩溃否决。改用
+      **0x52C6C4** 在打开 SOUNDMD 前加载配置/MIX/INI 到持久覆盖层，再在
+      **0x7510F6** 通过 `ECX` 取得 SOUNDMD 对象并只做内存复制。空目录二进制探针
+      已运行 60 秒；正式源码构建和实际声音键仍待验证。
 - [ ] 实测：往 `enabled/art、enabled/ai、enabled/uimd、enabled/sound` 放入测试 ini，
       确认游戏内真实生效，并分别验证 Ares/Phobos 的同名配置不会被错误覆盖
       （当前注入目录仅空 .gitkeep）。
+- [ ] sound 专项实测：空目录、`[Defaults]` 覆盖、新 `[SoundList]` 条目、多个入口
+      INI、重复 `+=` include、MIX 内 INI，以及 Ares + Phobos 下连续多次启动。
 - [ ] 实测：Ares/Phobos 共存时确认 `0x679A1B` 能到达，且私有 include 只展开一次。
 
 ## dump

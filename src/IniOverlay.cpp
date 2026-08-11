@@ -277,25 +277,62 @@ namespace {
     int MergeFileRecursive(CCINIClass* pTarget, const char* path,
                            const char* baseDir, IncludeContext& ctx);
 
-    int MergeIncludes(CCINIClass* pTarget, CCINIClass& src,
-                      const char* currentPath, IncludeContext& ctx)
+    // Do not read [#include] back from CCINIClass: duplicate keys such as
+    // "+=foo.ini" are collapsed by WriteString. Scan the raw text so each
+    // include entry keeps its source order and duplicate-key semantics.
+    int MergeIncludesRaw(CCINIClass* pTarget, const char* data, int size,
+                         const char* currentPath, IncludeContext& ctx)
     {
         char baseDir[kPathMax] = {};
         ParentDirOf(currentPath, baseDir, sizeof(baseDir));
+        if (!data || size < 0) return 0;
 
         int total = 0;
         int includes = 0;
-        for (auto* section = src.Sections.First();
-             section && section->IsValid(); section = section->Next()) {
-            if (!IsIncludeSection(section->Name)) continue;
-            for (auto* node = section->Entries.GenericList::First();
-                 node && node->IsValid(); node = node->Next()) {
-                auto* entry = static_cast<INIClass::INIEntry*>(node);
-                if (!entry->Value || !entry->Value[0]) continue;
-                ++includes;
-                const int keys = MergeFileRecursive(pTarget, entry->Value, baseDir, ctx);
-                if (keys > 0) total += keys;
+        char section[kIniTokenMax] = {};
+        const char* p = data;
+        const char* end = data + size;
+        if (size >= 3 && static_cast<unsigned char>(p[0]) == 0xEF &&
+            static_cast<unsigned char>(p[1]) == 0xBB &&
+            static_cast<unsigned char>(p[2]) == 0xBF) {
+            p += 3;
+        }
+
+        while (p < end) {
+            const char* lineEnd = p;
+            while (lineEnd < end && *lineEnd != '\r' && *lineEnd != '\n') ++lineEnd;
+
+            const char* begin = p;
+            while (begin < lineEnd && (*begin == ' ' || *begin == '\t')) ++begin;
+            const char* trimmedEnd = lineEnd;
+            while (trimmedEnd > begin &&
+                   (trimmedEnd[-1] == ' ' || trimmedEnd[-1] == '\t')) {
+                --trimmedEnd;
             }
+
+            if (begin < trimmedEnd && *begin != ';' && *begin != '#') {
+                if (*begin == '[' && trimmedEnd[-1] == ']') {
+                    CopyTrimmedSpan(begin + 1, trimmedEnd - 1,
+                                    section, sizeof(section), false);
+                } else if (IsIncludeSection(section)) {
+                    const char* equal = begin;
+                    while (equal < trimmedEnd && *equal != '=') ++equal;
+                    if (equal < trimmedEnd) {
+                        char includePath[kPathMax] = {};
+                        if (CopyTrimmedSpan(equal + 1, trimmedEnd,
+                                            includePath, sizeof(includePath), true) &&
+                            includePath[0]) {
+                            ++includes;
+                            const int keys = MergeFileRecursive(pTarget, includePath,
+                                                                baseDir, ctx);
+                            if (keys > 0) total += keys;
+                        }
+                    }
+                }
+            }
+
+            while (lineEnd < end && (*lineEnd == '\r' || *lineEnd == '\n')) ++lineEnd;
+            p = lineEnd;
         }
 
         if (includes > 0) {
@@ -364,10 +401,10 @@ namespace {
 
         CCINIClass source;
         ParseRawIni(source, rawData, rawSize, usedPath, ctx);
-        std::free(rawData);
-
         int keys = MergeBody(pTarget, source, usedPath, ctx);
-        const int includeKeys = MergeIncludes(pTarget, source, usedPath, ctx);
+        const int includeKeys = MergeIncludesRaw(pTarget, rawData, rawSize,
+                                                  usedPath, ctx);
+        std::free(rawData);
         --ctx.depth;
         return keys + (includeKeys > 0 ? includeKeys : 0);
     }
