@@ -30,7 +30,7 @@
 //              0x7510D0（修改 ESP）均已实测会在 SyringeIH 下崩溃，不能使用。
 //   InjectTarget 用「目标对象段数>0」作守卫：若某个对象尚未装载（或装载失败
 //   后段数为 0）则跳过，避免写进无效对象。
-//   显式 Files= 列表（旧版行为）仍保留：全部并进 rules。
+//   注入目标只由 enabled/<target> 目录决定，不存在跨目标的全局文件列表。
 //   inject 文件内的 [#include] 由 ra2hook 自己展开，独立于 Ares/Phobos：
 //     - 不修改原 rules/art 的 [#include] 段
 //     - 不把 inject 文件自己的 [#include] 段写入引擎目标对象
@@ -54,8 +54,6 @@
 #include <windows.h>
 
 #include <cstdio>
-#include <cstring>
-#include <cstdlib>
 
 #include "Config.h"
 #include "IniOverlay.h"
@@ -110,6 +108,12 @@ namespace RulesInject {
             return -1;
         }
 
+        if (stats.warnings > 0) {
+            Log::Warn("inject: %s skipped %d include issue(s): %s",
+                      path, stats.warnings,
+                      stats.firstWarning[0] ? stats.firstWarning : "include failure");
+        }
+
         IniOverlay::Copy(pTarget, &staging);
         return keys;
     }
@@ -128,31 +132,6 @@ namespace RulesInject {
                        char files[][kPathMax])
     {
         return IniOverlay::ScanDirectory(dir, wildcard, files);
-    }
-
-    // 显式 Files= 列表：逗号分隔的路径，全部并进 rules。
-    static void InjectExplicit(CCINIClass* pINI)
-    {
-        const char* list = Config::Get().inject.files;
-        if (!list || !list[0]) return;
-
-        const char* p = list;
-        while (*p) {
-            while (*p == ',' || *p == ' ' || *p == '\t') ++p;
-            if (!*p) break;
-
-            const char* start = p;
-            while (*p && *p != ',') ++p;
-            const char* end = p;
-            while (end > start && (end[-1] == ' ' || end[-1] == '\t')) --end;
-
-            const size_t len = static_cast<size_t>(end - start);
-            if (len == 0) continue;
-
-            char path[kPathMax] = {};
-            std::snprintf(path, sizeof(path), "%.*s", (int)len, start);
-            MergeFile(pINI, path);
-        }
     }
 
     // 对单个目标：扫描 enabled/<dir>，把目标对象注入。
@@ -281,16 +260,11 @@ namespace RulesInject {
         if (Config::Get().inject.mix)
             InjectMix();
 
-        // 显式 Files= 列表（旧版语义）优先，否则按目标目录注入。
-        if (Config::Get().inject.files[0]) {
-            InjectExplicit(CCINIClass::INI_Rules);
-        } else {
-            int total = 0;
-            // 前 kReadyAtMain 项 = rules/ra2md/art（0x679A1B 时已就绪）。
-            for (int i = 0; i < kReadyAtMain; ++i)
-                total += InjectTarget(kTargets[i]);
-            Log::Info("inject: 目标目录注入完成（rules/ra2md/art），共 %d 键", total);
-        }
+        int total = 0;
+        // 前 kReadyAtMain 项 = rules/ra2md/art（0x679A1B 时已就绪）。
+        for (int i = 0; i < kReadyAtMain; ++i)
+            total += InjectTarget(kTargets[i]);
+        Log::Info("inject: 目标目录注入完成（rules/ra2md/art），共 %d 键", total);
     }
 
     // ai 钩子 0x52D37D：AIMD.INI 已于 0x52d378 读进 INI_AI（装载完成），
@@ -302,7 +276,6 @@ namespace RulesInject {
 
         Config::Load();
         if (!Config::Get().inject.enabled) return;
-        if (Config::Get().inject.files[0]) return;   // 显式列表模式只注 rules
 
         if (Config::Get().inject.mix)
             InjectMix();
@@ -320,7 +293,6 @@ namespace RulesInject {
 
         Config::Load();
         if (!Config::Get().inject.enabled) return;
-        if (Config::Get().inject.files[0]) return;   // 显式列表模式只注 rules
 
         if (Config::Get().inject.mix)
             InjectMix();
@@ -339,7 +311,6 @@ namespace RulesInject {
 
         Config::Load();
         if (!Config::Get().inject.enabled) return;
-        if (Config::Get().inject.files[0]) return;   // 显式列表模式只注 rules
 
         if (Config::Get().inject.mix)
             InjectMix();

@@ -91,7 +91,7 @@ FromAresInclude=1
 - ✅ 设计已定（DEVELOPMENT.md v0.2）
 - ✅ 工程文件齐备，CI 编译通过
 - ✅ **dump 方向已实现**：INI/CSF/VXL/SHP/HVA 导出（`src/DumpIni.cpp` + `src/ArtMap.cpp`），已对真实 MO 数据核对
-- ✅ **inject 代码已支持多个 INI**：`[Inject] Files=` 支持逗号分隔列表，自动模式按各目标目录内文件名排序后逐个合并，后写覆盖前写；文件内 `[#include]` 由独立原始解析器展开，不经过 Ares/Phobos 的 `ReadCCFile` hook
+- ✅ **inject 代码已支持多个 INI**：注入目标完全由 `enabled/<target>/` 子目录决定；目录内按文件名排序后逐个合并，后写覆盖前写；文件内 `[#include]` 由独立原始解析器展开，不经过 Ares/Phobos 的 `ReadCCFile` hook
 - ⬜ **inject 待实测**：主 rules 候选点为 `0x679A1B`；sound 已改为 `0x52C6C4` 预备覆盖层、`0x7510F6` 内存应用。空目录二进制探针已运行 60 秒，但正式构建和实际声音键尚未验证。art/ai/uimd/sound 与 mix 仍需用 CI artifact 完成实机回归
 - ✅ **runtime 代码已实现**：`0x55DE3A` 游戏线程 tick、单机硬门禁、文件监视、完整状态重建、类型基线、回滚、命名管道和 `ui/` 外部控制面板
 - ✅ **UI 已本地构建**：.NET 8 Release 零警告，并通过 win-x64 自包含单文件发布

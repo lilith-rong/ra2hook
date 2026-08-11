@@ -15,7 +15,9 @@ namespace IniOverlay {
         int sections = 0;
         int keys = 0;
         int errors = 0;
+        int warnings = 0;
         char firstError[256] = {};
+        char firstWarning[256] = {};
     };
 
     int CountSections(INIClass* pINI);

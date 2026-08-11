@@ -5,7 +5,7 @@
 ## 注入（inject）
 
 - [x] 注入目录按目标拆分子目录：`ra2hook/inject/enabled/<rules|ra2md|art|ai|uimd|sound>/*.ini`
-- [x] 自动模式支持每个目标目录多个 INI：按文件名排序，后写覆盖前写；`Files=` 也支持多个逗号分隔文件。
+- [x] 每个目标目录支持多个 INI：按文件名排序，后写覆盖前写；目标只由目录决定。
 - [x] inject 文件内独立展开 `[#include]`：可用 `enabled/<target>/index.ini`
       控制加载散装或 mix 内的规则 ini，不写入/干扰 Ares/Phobos 原 include 链。
 - [x] 私有 include 解析已绕过 `CCINIClass::ReadCCFile`，避免 Ares 自动展开造成重复或顺序不确定。

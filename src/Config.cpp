@@ -63,16 +63,13 @@ namespace Config {
             Log::Debug("Config: [Dump] 段不存在，dump 保持关闭");
         }
 
-        // [Inject]：段可能不存在（默认 ra2hook.ini 里就没有）。若不检查段存在性，
+        // [Inject]：段可能不存在。若不检查段存在性，
         // ReadBool/ReadString 会回退到 [Dump] 段，把 OnlyUnits 之类的值误读进来——
         // Enabled 可能被错误地打开。故先查段，存在才读。
         s_settings.inject.enabled = false;
-        s_settings.inject.files[0] = '\0';
         s_settings.inject.mix     = false;
         if (FindSection(&ini, "Inject")) {
             s_settings.inject.enabled = ini.ReadBool("Inject", "Enabled", false);
-            ini.ReadString("Inject", "Files", "", s_settings.inject.files,
-                           sizeof(s_settings.inject.files));
             s_settings.inject.mix = ini.ReadBool("Inject", "Mix", false);
         } else {
             Log::Debug("Config: [Inject] 段不存在，inject 保持关闭");

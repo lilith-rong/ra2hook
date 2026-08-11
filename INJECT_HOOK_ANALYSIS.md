@@ -150,14 +150,13 @@ Strength=543
 ```ini
 [Inject]
 Enabled=yes
-Files=
 Mix=yes
 
 [Log]
 Level=4
 ```
 
-这里必须保持 `Files=` 为空，才能走 `enabled/rules/*.ini` 的目标目录扫描模式。
+目标由 `enabled/<target>/` 子目录决定；此处不再提供无法表达目标类型的全局文件列表。
 
 ### 6.3 内置探针日志
 
@@ -212,8 +211,7 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 
 ### 9.1 多文件合并规则
 
-- `Files=` 非空时，按逗号分隔的顺序逐个合并到 `INI_Rules`；后一个文件覆盖前一个文件的同名 `section/key`。
-- `Files=` 为空时，扫描 `enabled/<target>/*.ini`；每个目标目录按文件名不区分大小写排序后逐个合并。
+- 始终扫描 `enabled/<target>/*.ini`；目录名决定注入对象，每个目标目录按文件名不区分大小写排序后逐个合并。
 - 每个文件先合并自身正文，再按 `[#include]` 段中的出现顺序深度优先合并引用文件；重复键也保留，故 Ares 常用的多行 `+=文件.ini` 可作为私有 include 入口。引用文件后写，因此覆盖当前文件。
 - 推荐把 `enabled/<target>` 只作为入口目录，真正的可选规则放在 mix 或其他目录中由 `index.ini` 引用；否则同一个文件既会被目录扫描又会被 include，可能被重复写入。
 - include 路径先相对当前散装文件目录解析，再按游戏/MIX 文件系统解析。mix 会在每个目标首次注入前注册，因此较早的 `sound/ai/uimd` 挂点也能引用 mix 内 INI。循环引用和超过 32 层的链会被跳过并写日志。

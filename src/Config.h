@@ -30,14 +30,12 @@ namespace Config {
     struct InjectSettings {
         bool enabled = false;
 
-        // 显式注入文件列表（逗号分隔，顺序即注入顺序，后者覆盖前者）。
-        // 支持多个文件，但只作用于 rules 目标（与旧版行为一致）。留空 = 自动按目标目录扫描：
+        // 注入目标只由 enabled 下的子目录决定：
         //   ra2hook/inject/enabled/rules/*.ini   -> INI_Rules
         //   ra2hook/inject/enabled/ra2md/*.ini   -> INI_RA2MD
         //   ra2hook/inject/enabled/art|ai|uimd  -> 目标已注册（挂点见 Hooks.RulesInject.cpp）
         //   ra2hook/inject/enabled/sound/*.ini -> SOUNDMD 两阶段覆盖（0x52C6C4/0x7510F6）
         // 每个目录内按文件名（不区分大小写）排序，后写覆盖前写。
-        char files[512] = {};
 
         // 是否把 ra2hook/inject/mix/*.mix 全部注册进引擎文件系统。
         // mix 内可放自定义 SHP/VXL/PCX —— 这类资源只被惰性引用，注入时机宽松。

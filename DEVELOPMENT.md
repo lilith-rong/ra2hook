@@ -375,7 +375,6 @@ Level=3
 
 [Inject]
 Enabled=no
-Files=
 Mix=yes
 
 [Runtime]
@@ -445,7 +444,7 @@ UI 操作见 `RUNTIME_INI.md`。
 ### 阶段 2:核心注入（最小可用版本）
 
 - [x] 注入文件读取 — `CCFileClass` 取原始字节，自有解析器写入临时 `CCINIClass`，不经过 Ares 的 `ReadCCFile` hook
-- [x] `MergeFile`:逐键 `WriteString`,后写胜出；显式 `Files=` 和各目标目录均支持多个文件
+- [x] `MergeFile`:逐键 `WriteString`,后写胜出；各目标目录均支持多个文件，目录名明确决定注入对象
 - [x] inject 私有 `[#include]` 展开 — 不写入/干扰 Ares/Phobos 原 include 链;路径优先按当前文件目录解析,找不到再走 RA2/引擎文件系统（可引用已注册 mix 内 INI）
 - [x] 合并后 rules 快照 dump — dump 点在 inject 之后,`rulesmd.ini` dump 即包含注入结果（两者共用 INI_Rules 同一对象)
 - [ ] 与 Ares / Phobos 同时加载的共存测试（依赖本机/游戏环境,尚未跑）

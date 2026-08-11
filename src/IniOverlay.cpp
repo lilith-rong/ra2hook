@@ -35,6 +35,18 @@ namespace {
         va_end(args);
     }
 
+    void RecordWarning(MergeStats* stats, const char* format, ...)
+    {
+        if (!stats) return;
+        ++stats->warnings;
+        if (stats->firstWarning[0]) return;
+
+        va_list args;
+        va_start(args, format);
+        std::vsnprintf(stats->firstWarning, sizeof(stats->firstWarning), format, args);
+        va_end(args);
+    }
+
     bool IsIncludeSection(const char* name)
     {
         return name && _stricmp(name, "#include") == 0;
@@ -124,6 +136,24 @@ namespace {
         const char* logTag = nullptr;
     };
 
+    void RecordResolvableIncludeWarning(IncludeContext& ctx,
+                                         const char* format, ...)
+    {
+        char message[256] = {};
+        va_list args;
+        va_start(args, format);
+        std::vsnprintf(message, sizeof(message), format, args);
+        va_end(args);
+
+        // depth is non-zero while resolving a child referenced by [#include].
+        // A missing child must not discard valid siblings in the same manifest.
+        if (ctx.depth > 0) {
+            RecordWarning(ctx.stats, "%s", message);
+        } else {
+            RecordError(ctx.stats, "%s", message);
+        }
+    }
+
     bool IsInIncludeStack(const IncludeContext& ctx, const char* path)
     {
         for (int i = 0; i < ctx.depth; ++i) {
@@ -140,12 +170,12 @@ namespace {
         if (!request || !outData || !outSize || !usedPath) return false;
         const char* requestEnd = request + std::strlen(request);
         if (!CopyTrimmedSpan(request, requestEnd, name, sizeof(name), true)) {
-            RecordError(ctx.stats, "path too long: %s", request);
+            RecordResolvableIncludeWarning(ctx, "path too long: %s", request);
             return false;
         }
         NormalizeSlashes(name);
         if (!name[0]) {
-            RecordError(ctx.stats, "empty include path");
+            RecordResolvableIncludeWarning(ctx, "empty include path");
             return false;
         }
 
@@ -203,17 +233,17 @@ namespace {
             return true;
         }
 
-        RecordError(ctx.stats, "file not found: %s", name);
+        RecordResolvableIncludeWarning(ctx, "file not found: %s", name);
         return false;
     }
 
-    int ParseRawIni(CCINIClass& out, const char* data, int size,
-                    const char* path, IncludeContext& ctx)
+    bool ParseRawIni(CCINIClass& out, const char* data, int size,
+                     const char* path, IncludeContext& ctx)
     {
-        if (!data || size < 0) return 0;
+        if (!data || size < 0) return false;
 
         char section[kIniTokenMax] = {};
-        int sectionCount = 0;
+        bool valid = true;
         int lineNumber = 0;
         const char* p = data;
         const char* end = data + size;
@@ -237,13 +267,23 @@ namespace {
             }
 
             if (begin < trimmedEnd && *begin != ';' && *begin != '#') {
-                if (*begin == '[' && trimmedEnd[-1] == ']') {
-                    if (CopyTrimmedSpan(begin + 1, trimmedEnd - 1,
+                if (*begin == '[') {
+                    const char* close = begin + 1;
+                    while (close < trimmedEnd && *close != ']') ++close;
+                    const char* trailing = close < trimmedEnd ? close + 1 : trimmedEnd;
+                    while (trailing < trimmedEnd &&
+                           (*trailing == ' ' || *trailing == '\t')) {
+                        ++trailing;
+                    }
+                    const bool validTrailing = trailing == trimmedEnd ||
+                                               *trailing == ';' || *trailing == '#';
+                    if (close < trimmedEnd && validTrailing &&
+                        CopyTrimmedSpan(begin + 1, close,
                                         section, sizeof(section), false) && section[0]) {
-                        ++sectionCount;
                     } else {
                         section[0] = '\0';
                         RecordError(ctx.stats, "%s:%d invalid section", path, lineNumber);
+                        valid = false;
                     }
                 } else {
                     const char* equal = begin;
@@ -251,14 +291,17 @@ namespace {
                     if (equal >= trimmedEnd || !section[0]) {
                         RecordError(ctx.stats, "%s:%d key outside section or missing '='",
                                     path, lineNumber);
+                        valid = false;
                     } else {
                         char key[kIniTokenMax] = {};
                         if (!CopyTrimmedSpan(begin, equal, key, sizeof(key), false) || !key[0]) {
                             RecordError(ctx.stats, "%s:%d invalid key", path, lineNumber);
+                            valid = false;
                         } else {
                             char* value = DuplicateTrimmedSpan(equal + 1, trimmedEnd);
                             if (!value) {
                                 RecordError(ctx.stats, "%s:%d out of memory", path, lineNumber);
+                                valid = false;
                             } else {
                                 out.WriteString(section, key, value);
                                 std::free(value);
@@ -268,10 +311,11 @@ namespace {
                 }
             }
 
-            while (lineEnd < end && (*lineEnd == '\r' || *lineEnd == '\n')) ++lineEnd;
+            if (lineEnd < end && *lineEnd == '\r') ++lineEnd;
+            if (lineEnd < end && *lineEnd == '\n') ++lineEnd;
             p = lineEnd;
         }
-        return sectionCount;
+        return valid;
     }
 
     int MergeFileRecursive(CCINIClass* pTarget, const char* path,
@@ -376,8 +420,8 @@ namespace {
     {
         if (!pTarget || !path || !path[0]) return -1;
         if (ctx.depth >= kMaxIncludeDepth) {
-            RecordError(ctx.stats, "include depth exceeds %d: %s",
-                        kMaxIncludeDepth, path);
+            RecordWarning(ctx.stats, "include depth exceeds %d: %s",
+                          kMaxIncludeDepth, path);
             return -1;
         }
 
@@ -390,7 +434,7 @@ namespace {
         }
 
         if (IsInIncludeStack(ctx, usedPath)) {
-            RecordError(ctx.stats, "include cycle: %s", usedPath);
+            RecordWarning(ctx.stats, "include cycle: %s", usedPath);
             Log::Warn("%s: include cycle %s", Tag(ctx.logTag), usedPath);
             std::free(rawData);
             return -1;
@@ -400,8 +444,12 @@ namespace {
         if (ctx.stats) ++ctx.stats->files;
 
         CCINIClass source;
-        ParseRawIni(source, rawData, rawSize, usedPath, ctx);
-        int keys = MergeBody(pTarget, source, usedPath, ctx);
+        const bool valid = ParseRawIni(source, rawData, rawSize, usedPath, ctx);
+        int keys = valid ? MergeBody(pTarget, source, usedPath, ctx) : 0;
+        if (!valid) {
+            Log::Warn("%s: skipped malformed file body %s",
+                      Tag(ctx.logTag), usedPath);
+        }
         const int includeKeys = MergeIncludesRaw(pTarget, rawData, rawSize,
                                                   usedPath, ctx);
         std::free(rawData);
