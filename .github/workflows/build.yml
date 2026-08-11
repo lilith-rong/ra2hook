@@ -24,17 +24,28 @@ jobs:
 
     # windows-latest 自带 v143 工具集与 Windows 10 SDK，满足 DEVELOPMENT.md §2.3。
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v1.1
+      uses: microsoft/setup-msbuild@v2
       with:
         vs-version: '[16.0, )'
 
     # 让编译错误在 PR diff 里高亮。
     - uses: ammaraskar/msvc-problem-matcher@master
 
+    - name: Set up .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore runtime UI
+      run: dotnet restore ui/RA2Hook.RuntimeUI.csproj
+
     - name: Build
       working-directory: ${{ env.GITHUB_WORKSPACE }}
-      run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:GitCommit=${{ github.sha }} /p:GitBranch=${{ github.ref_name }} ${{ env.SOLUTION_FILE_PATH }}
+      run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=x86 /p:GitCommit=${{ github.sha }} /p:GitBranch=${{ github.ref_name }} ${{ env.SOLUTION_FILE_PATH }}
       shell: cmd
+
+    - name: Publish runtime UI
+      run: dotnet publish ui/RA2Hook.RuntimeUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o Release/ui
 
     - name: Upload artifact
       if: ${{ success() }}
@@ -44,4 +55,5 @@ jobs:
         path: |
           ${{ env.BUILD_CONFIGURATION }}/ra2hook.dll
           ${{ env.BUILD_CONFIGURATION }}/ra2hook.pdb
+          ${{ env.BUILD_CONFIGURATION }}/ui/**
         if-no-files-found: error

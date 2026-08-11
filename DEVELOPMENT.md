@@ -193,29 +193,31 @@ push → 等数分钟 → 下 artifact → 解压进 RA2 目录 → 手动启动
 - **太早**会被后续的 include 处理覆盖
 - **太晚**（类型数据已解析）改 `CCINIClass` 完全无效,引擎已经把值拷进 TypeClass 了
 
-### 4.2 注入点:`0x679A15`
+### 4.2 注入点:`0x679A1B`
 
 Phobos 的 hook 命名恰好把这个窗口标注了出来（已核实）:
 
 | 地址 | Phobos 的命名 | 相对窗口的位置 |
 |---|---|---|
-| `0x679A15` | `RulesData_LoadBeforeTypeData` | **窗口内** ← 我们要的 |
+| `0x679A15` | `RulesData_LoadBeforeTypeData` 入口 | Ares/Phobos 的处理点 |
+| `0x679A1B` | 同一函数中完成参数取值后的后置点 | **窗口内** ← ra2hook 使用 |
 | `0x679CAF` | `RulesData_LoadAfterTypeData` | 太晚 |
 | `0x668F6A` | `Read_File_LoadTypes` / `InitializeAfterAllLoaded` | 太晚 |
 
-**该地址的寄存器约定（已核实,来自 Phobos 源码）**:
+`0x679A15` 的原始指令是 `push ebx; push esi; mov esi,[esp+0Ch]`，因此到达
+`0x679A1B` 时 `ESI` 已经是 `CCINIClass*`。ra2hook 使用这个相邻的 5 字节点：
 
 ```cpp
-DEFINE_HOOK(0x679A15, RulesData_LoadBeforeTypeData, 0x6)
+DEFINE_HOOK(0x679A1B, RA2Hook_RulesInject_PostAresPhobos, 0x5)
 {
-    GET(RulesClass*, pItem, ECX);          // ECX  = RulesClass*
-    GET_STACK(CCINIClass*, pINI, 0x4);     // [esp+4] = CCINIClass*  ← 注入目标
+    GET(CCINIClass*, pINI, ESI);           // 0x679A15 已完成参数取值
     ...
     return 0;                              // 0 = 不改控制流,继续原流程
 }
 ```
 
-补丁长度 `0x6`。**`CCINIClass*` 直接可得,不需要逆向找参数位置。**
+补丁长度 `0x5`。这是与 Ares/Phobos 地址不重叠的后置点；当前只完成 IDA 静态确认，
+仍需在目标 `gamemd.exe` 上实机验证。
 
 ### 4.3 不要依赖 Syringe 的链序
 
@@ -223,13 +225,15 @@ Phobos 在 `0x668F6A` 上挂了**两个**函数,证明同址串联可行——�
 
 这对我们有实际影响:如果我们在 Phobos 的 handler 之前注入,Phobos 读到的是我们注入后的值;之后注入则读到原值。对 Phobos 自有的配置键,这个差异是可观测的。
 
-**结论**:正确性不能建立在链序上。我们依赖的是**控制流位置**（`0x679A15` 在类型解析之前）,而这一点与谁先执行无关。对 Phobos 自有键的可见性差异,视为已知的、不保证的行为,写进文档而不是试图控制。
+**结论**:rules 主注入不再依赖同址 handler 的链序，而是依赖 `0x679A15` 正常续行后到达
+`0x679A1B`。对 Phobos/Ares 在 `0x679A15` 已经读取并缓存的自定义字段，后置写入仍然太晚，
+这属于语义限制，不是地址冲突。
 
-### 4.4 关键不确定项:此点是否已包含 `[#include]` 的内容
+### 4.4 关键验证项:此点是否已包含 `[#include]` 的内容
 
 **这是整个设计唯一的致命假设**,而且我没能从源码确认。
 
-推理是:Ares 文档说 include 在"主文件加载完毕后"处理,属于 INI 读取阶段;而 `0x679A15` 属于 rules 消费阶段,在其之后。**但我没有证据表明 Ares 的 include 实现确实在 `CCINIClass` 读取层而非更高层。**
+推理是:Ares 文档说 include 在"主文件加载完毕后"处理,属于 INI 读取阶段;而 `0x679A1B` 属于 rules 消费阶段,在其之后。该时序仍要用探针确认。
 
 **验证方法（便宜、确定,应作为第一个跑通的功能）**:探针键。
 
@@ -238,13 +242,13 @@ Phobos 在 `0x668F6A` 上挂了**两个**函数,证明同址串联可行——�
    [RA2HookProbe]
    FromAresInclude=1
    ```
-2. 在 `0x679A15` 的 handler 里读它并记日志:
+2. 在 `0x679A1B` 的 handler 里读它并记日志:
    ```cpp
    char buf[8] = {};
    pINI->ReadString("RA2HookProbe", "FromAresInclude", "", buf, sizeof(buf));
-   Log::Info("probe at 0x679A15: FromAresInclude=[%s]", buf);
+   Log::Info("probe at 0x679A1B: FromAresInclude=[%s]", buf);
    ```
-3. 读到 `1` → 假设成立,设计不变。读到空 → 此点早于 include 处理,**必须换点**,候选是 `rulesmd.ini` 的 `ReadCCFile` 返回处（需要找 xref）。
+3. 读到 `1` → 假设成立。读到空 → 当前 exe/扩展组合需要继续在 IDA 查找更晚的 rules 消费前窗口。
 
 `ReadString` 地址 `0x528A10`（已核实）。这个探针只用已核实的 API,零风险。
 
@@ -252,7 +256,7 @@ Phobos 在 `0x668F6A` 上挂了**两个**函数,证明同址串联可行——�
 
 有两条路:
 
-**路线 A（推荐）:自己解析 + `WriteString` 逐键写入**
+**路线 A（当前实现）:原始读取 + 自己解析 + `WriteString` 逐键写入**
 
 ```cpp
 // INIClass::WriteString @ 0x528660 —— 键已存在则覆盖,不存在则新增
@@ -262,6 +266,8 @@ pTarget->WriteString(section, key, value);
 - ✅ 语义完全确定:"后写胜出",正好对应需求里的"在 include 之后加载"
 - ✅ 只依赖已核实的单个 API
 - ✅ 写入方式与引擎自身一致,下游读取者无法区分
+- ✅ 原始字节通过 `CCFileClass` 获取，仍支持散装文件和已注册 MIX 内文件
+- ✅ 不调用 `CCINIClass::ReadCCFile`，不会被 Ares 的原生 include hook 重复展开
 - ✅ inject 文件内可用 ra2hook 私有 `[#include]`:当前文件先合并,再按 include 键顺序深度优先合并引用文件;该段不写入目标对象,不参与 Ares/Phobos 原 include 链
 - ❌ 不复刻 Ares 其他扩展语义（如 `$Inherits`）。需求是独立注入机制,不是复制 Ares INI 处理器
 
@@ -332,9 +338,9 @@ namespace RulesInject {
     }
 }
 
-DEFINE_HOOK(0x679A15, RA2Hook_RulesInject, 0x6)
+DEFINE_HOOK(0x679A1B, RA2Hook_RulesInject_PostAresPhobos, 0x5)
 {
-    GET_STACK(CCINIClass*, pINI, 0x4);
+    GET(CCINIClass*, pINI, ESI);
     RulesInject::Apply(pINI);
     return 0;
 }
@@ -358,41 +364,39 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 | `coldness` / `aresPhobosConflict` | 降级为注释——撞点由 Syringe 串联,不再是崩溃 |
 | `enabled` | **保留**,这是唯一仍有运行时意义的字段 |
 
-⚠️ **我没有改动 `hooks.json`**。它是你的原始设计记录,而且新旧职责差异太大,不适合原地覆盖。建议的做法是新增 `ra2hook.json` 承担运行时配置,`hooks.json` 保留为设计存档或删除——**这个决定我留给你**。
+⚠️ **`hooks.json` 仍是早期设计记录，程序不读取它。** 当前所有开关都在
+游戏目录下的 `ra2hook.ini`，避免引入另一套配置解析器。
 
-### 5.2 建议的新配置
+### 5.2 当前配置
 
-```jsonc
-{
-  "schema": "ra2hook.config/v2",
-  "logLevel": "info",                       // off|error|warn|info|debug
+```ini
+[Log]
+Level=3
 
-  "injection": {
-    "enabled": true,
-    "files": [                              // 按数组顺序依次注入,后者覆盖前者
-      "ra2hook/extra_units.ini",
-      "ra2hook/extra_weapons.ini"
-    ],
-    "onConflict": "overwrite",              // overwrite|skip
-    "dumpMergedRules": "ra2hook/dump/rules_merged.ini",   // 空 = 不 dump
-    "probe": true                           // §4.4 探针,验证完可关
-  },
+[Inject]
+Enabled=no
+Files=
+Mix=yes
 
-  "runtime": {                              // 后续功能,暂全关
-    "enabled": false,
-    "hotkeys": {}
-  }
-}
+[Runtime]
+Enabled=no
+AutoApply=yes
+Directory=ra2hook\runtime
+DebounceMs=500
 ```
+
+`[Dump]` 的完整字段及注释直接见仓库根目录的 `ra2hook.ini`。运行时行为、文件格式和
+UI 操作见 `RUNTIME_INI.md`。
 
 加载器规则:
 
 ```
-1. 文件不存在        → 全部功能关闭,写日志,DLL 变惰性空壳（不阻止游戏启动）
-2. schema 不匹配     → 同上
-3. JSON 解析失败     → 同上,并把错误位置写进日志
-4. injection.enabled == false → handler 立即 return
-5. files 中某文件不存在 → 跳过该文件 + WARN,继续处理其余
+1. ra2hook.ini 不存在       → 使用安全默认值，dump/inject/runtime 全部关闭
+2. 对应 section 不存在      → 该子系统使用默认值，不回退读取其他 section
+3. Inject.Enabled == no     → 启动注入 handler 立即返回
+4. Inject.Files 指定文件缺失 → 记录 WARN；自动目录模式按文件名顺序合并现有文件
+5. Runtime.Enabled == no    → IPC 仍可报告状态，但拒绝所有游戏数据写入
+6. runtime 文件语法/include 错误 → 保留上一代有效状态，不做部分应用
 ```
 
 **任何失败都不得阻止游戏启动。** 装不上就不装,把原因写清。崩在启动阶段会让用户完全无法定位问题。
@@ -405,11 +409,11 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 
 | # | 待验证 | 方法 | 若为否 |
 |---|---|---|---|
-| 1 | `0x679A15` 处 `[#include]` 内容是否已并入 | §4.4 探针键 | 换点到 `ReadCCFile` 返回处 |
+| 1 | `0x679A1B` 处 `[#include]` 内容是否已并入 | §4.4 探针键 | 继续找更晚的 rules 消费前窗口 |
 | 2 | `WriteString` 在此阶段写入是否被引擎读到 | 注入一个改血量的键,游戏内验证 | 整个方案不成立,退回解析后直写 TypeClass |
 | 3 | 我们的 DLL 是否必须 SyringeEx | 在旧版 Syringe 下试跑 | 需分发 SyringeEx（Phobos 已强制要求它） |
-| 4 | `ReadCCFile` 是合并还是清空重读 | 在临时 `CCINIClass` 上试 | 路线 B 永久放弃 |
-| 5 | 与 Phobos 同挂 `0x679A15` 是否稳定 | 双 DLL 同时加载 | 换到相邻未占用地址 |
+| 4 | 原始解析器对目标 INI 的语法覆盖是否足够 | 多文件/include/mix 实机测试 | 补充解析语法，不回到 Ares hook |
+| 5 | `0x679A1B` 是否能在 Ares/Phobos 续行后到达 | 双 DLL 同时加载并看日志 | 重新在 IDA 查找后置点 |
 
 ---
 
@@ -434,13 +438,14 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 - [x] Logger（文件输出,带级别）— `src/Logger.h`
 - [x] Config 加载 — `src/Config.cpp`（ra2hook.ini,见 §5）
 - [x] 在 `0x679A15` 挂探针 — 已实测:该点 pINI==INI_Rules,写入 `[E1]Strength=543` 被类型解析采纳（见 `src/Hooks.RulesInject.cpp` 头部注释）
+- [x] IDA 确认并切换到后置候选点 `0x679A1B`（源码已切换，实机待验证）
 
 **出口条件**:已达成。此点 CCINIClass 含全部 include 内容,手工 WriteString 能在游戏内生效。
 
 ### 阶段 2:核心注入（最小可用版本）
 
-- [x] 注入文件读取 — 直接用引擎 CCINIClass 读,不写自带解析器（行为与游戏一致）
-- [x] `MergeFile`:逐键 `WriteString`,后写胜出（`[Inject] Files=` 显式列表优先,否则扫 `ra2hook/inject/enabled/<target>/*.ini`）
+- [x] 注入文件读取 — `CCFileClass` 取原始字节，自有解析器写入临时 `CCINIClass`，不经过 Ares 的 `ReadCCFile` hook
+- [x] `MergeFile`:逐键 `WriteString`,后写胜出；显式 `Files=` 和各目标目录均支持多个文件
 - [x] inject 私有 `[#include]` 展开 — 不写入/干扰 Ares/Phobos 原 include 链;路径优先按当前文件目录解析,找不到再走 RA2/引擎文件系统（可引用已注册 mix 内 INI）
 - [x] 合并后 rules 快照 dump — dump 点在 inject 之后,`rulesmd.ini` dump 即包含注入结果（两者共用 INI_Rules 同一对象)
 - [ ] 与 Ares / Phobos 同时加载的共存测试（依赖本机/游戏环境,尚未跑）
@@ -449,10 +454,16 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 
 ### 阶段 3:运行时功能
 
-- [ ] 主循环 tick（取循环顶部,不取逻辑帧内部）
-- [ ] 热键轮询（`GetAsyncKeyState` 即可,不装键盘钩子）
-- [ ] 现读型属性改值（直接改 `WeaponTypeClass` 等字段,见 §8）
-- [ ] 单位创建点:拷贝型属性对新单位生效
+- [x] IDA 确认 `MainLoop(0x55D360)` 的外层回边在调用方；正常帧 tick 使用
+      `0x55DE3A`，避开当前公开 Phobos 的主循环 hook 地址。
+- [x] 文件 watcher、命令队列、游戏线程 staging/transaction/rollback。
+- [x] Campaign/Skirmish 硬门禁；LAN/Internet/录像回放拒绝并在离局时回滚。
+- [x] `RulesClass::Read_*` 与 `AbstractTypeClass::LoadFromINI` 路由，类型基线由
+      `SaveToINI` 在本局首次写前捕获。
+- [x] 外部 WPF 控制面板（`ui/`）与命名管道协议。
+- [ ] Action C++ 编译与真实游戏验证。
+
+完整实现边界、配置和测试顺序见 `RUNTIME_INI.md`。
 
 ### 阶段 4:可选
 
@@ -496,7 +507,9 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 | `RulesClass::Init` | `0x6686C0` |
 | `RulesClass::Read_File` | `0x668BF0` |
 
-**注入点约定** — Phobos `src/Ext/Rules/Body.cpp`:`0x679A15` 处 `ECX = RulesClass*`,`[esp+4] = CCINIClass*`,补丁长度 `0x6`,`return 0` 表示继续原流程。
+**注入点约定** — Phobos `src/Ext/Rules/Body.cpp` 在 `0x679A15` 使用 `ECX = RulesClass*`、
+`[esp+4] = CCINIClass*`。ra2hook 不再占用这个 6 字节点，而是使用其后的 `0x679A1B`、
+`ESI = CCINIClass*`、补丁长度 `0x5`；`return 0` 表示继续原流程。
 
 **Phobos 已占用地址**（避让参考）:`0x667A1D`、`0x667A30`、`0x668BF0`、`0x668F6A`（两个 handler）、`0x674730`、`0x6744E4`、`0x675205`、`0x675210`、`0x678841`、`0x679A15`、`0x679CAF`、`0x7115AE`。
 
@@ -510,10 +523,10 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| **`0x679A15` 早于 include 处理** | 核心需求落空 | §4.4 探针,阶段 1 就验掉;备用点是 `ReadCCFile` 返回处 |
+| **`0x679A1B` 早于 include 处理** | 核心需求落空 | §4.4 探针;按当前 exe 继续找 rules 消费前窗口 |
 | 本机无编译环境 | 无法迭代 | 阶段 0 加装 C++ 工作负载;CI 作为兜底 |
 | 仅靠 CI 迭代 | 循环慢到难以调试 | 本地环境优先,CI 只做正式构建 |
-| `ReadCCFile` 语义未知 | 可能清空整个 rules | 默认走路线 A;路线 B 只在临时对象上验 |
+| 私有解析器与特殊 INI 语法差异 | 个别非标准语法未生效 | 先使用普通 section/key=value；发现实际语法缺口后补解析器 |
 | Syringe 链序不可控 | 与 Phobos 的可见性差异 | 不依赖链序,只依赖控制流位置（§4.3） |
 | 无异常可用 | 错误处理受限 | 返回值传错误 + 显式检查,必要时 SEH |
 | 联机不同步 | 改值必然 desync | 定位为单机/调试工具,不做联机承诺 |

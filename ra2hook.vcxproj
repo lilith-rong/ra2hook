@@ -26,8 +26,13 @@
     <ClCompile Include="$(ThisDir)\src\DumpIO.cpp" />
     <ClCompile Include="$(ThisDir)\src\DumpIni.cpp" />
     <ClCompile Include="$(ThisDir)\src\ArtMap.cpp" />
+    <ClCompile Include="$(ThisDir)\src\IniOverlay.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Runtime.cpp" />
+    <ClCompile Include="$(ThisDir)\src\RuntimeWatcher.cpp" />
+    <ClCompile Include="$(ThisDir)\src\RuntimeProtocol.cpp" />
     <ClCompile Include="$(ThisDir)\src\Hooks.RulesInject.cpp" />
     <ClCompile Include="$(ThisDir)\src\Hooks.Dump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Hooks.Runtime.cpp" />
   </ItemGroup>
 
   <!-- 头文件 -->
@@ -37,5 +42,9 @@
     <ClInclude Include="$(ThisDir)\src\DumpIO.h" />
     <ClInclude Include="$(ThisDir)\src\DumpIni.h" />
     <ClInclude Include="$(ThisDir)\src\ArtMap.h" />
+    <ClInclude Include="$(ThisDir)\src\IniOverlay.h" />
+    <ClInclude Include="$(ThisDir)\src\Runtime.h" />
+    <ClInclude Include="$(ThisDir)\src\RuntimeWatcher.h" />
+    <ClInclude Include="$(ThisDir)\src\RuntimeProtocol.h" />
   </ItemGroup>
 </Project>

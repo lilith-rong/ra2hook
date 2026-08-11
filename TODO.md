@@ -4,17 +4,32 @@
 
 ## 注入（inject）
 
-- [x] 注入目录按目标拆分子目录：`ra2hook/inject/enabled/<rules|ra2md|art|ai|uimd>/*.ini`
+- [x] 注入目录按目标拆分子目录：`ra2hook/inject/enabled/<rules|ra2md|art|ai|uimd|sound>/*.ini`
+- [x] 自动模式支持每个目标目录多个 INI：按文件名排序，后写覆盖前写；`Files=` 也支持多个逗号分隔文件。
 - [x] inject 文件内独立展开 `[#include]`：可用 `enabled/<target>/index.ini`
       控制加载散装或 mix 内的规则 ini，不写入/干扰 Ares/Phobos 原 include 链。
-- [ ] **art 注入挂点** — 引擎 `INI_Art`（&CCINIClass::INI_Art，0x887180）"类型解析前"挂点未定：
-      对象在 rules 窗口可能尚未装载，需先找 `artmd` 独立的加载/消费点，才能把
-      `enabled/art/*.ini` 真正并进去。需要 IDA 找 xref。
-- [ ] **ai 注入挂点** — `INI_AI`（0x887128），同上。
-- [ ] **uimd 注入挂点** — `INI_UIMD`（0x887208）在 load-all 时对象段数为 0，
-      需要找它真正的装载时机（UI 初始化段），再决定注入点。
-- [ ] **sound 注入** — `soundmd` 不走 CCINIClass（引擎自解析），本套注入机制
-      不适用；需独立方案（钩 sound 载入函数或直接改文件）。暂缓。
+- [x] 私有 include 解析已绕过 `CCINIClass::ReadCCFile`，避免 Ares 自动展开造成重复或顺序不确定。
+- [x] **art 注入挂点** — `INI_Art`（&CCINIClass::INI_Art，0x887180）：IDA 定位
+      ARTMD.INI 在 `sub_52CD70` 内 0x52d053 读进 INI_Art，早于含注入点的
+      `sub_668BF0`（0x52d317 调用）；art 读取循环（0x679a66）在注入点后，
+      故复用后置主挂点 **0x679A1B** 注入（kTargets[i].mapped=true）。原生 art
+      字段可在类型读取前生效，但 Phobos 在 0x679A15 早期缓存的 LaserTrail 等扩展
+      字段不会看到后写内容。
+- [x] **ai 注入挂点** — `INI_AI`（0x887128）：AIMD.INI 在 `sub_52CD70` 0x52d378
+      读进 INI_AI（晚于 0x679A15），独立挂点 **0x52D37D**（7 字节 lea，装载完成
+      后、AI 读取前注入）。
+- [x] **uimd 注入挂点** — `INI_UIMD`（0x887208）：UIMD.INI 在 `sub_534FA0`
+      0x535311 读进 INI_UIMD，独立挂点 **0x53531A**（5 字节 mov，装载完成后、
+      sub_674650 读取 0x53533d 之前注入）。
+- [x] **sound 注入** — `soundmd` 在 `sub_52BA60` 内读进**栈上局部** CCINIClass（非全局，
+      0x52c763 ReadCCFile），独立挂点 **0x52C796**（5 字节 call sub_7510D0，此时
+      ECX = &v72）。返回 0 后原 call 照常执行引擎的 [SoundList]/[Defaults] 解析。
+      注入目录 `ra2hook/inject/enabled/sound/*.ini`（此文件中 [SoundList] 段写入
+      局部对象后会被引擎采纳）。
+- [ ] 实测：往 `enabled/art、enabled/ai、enabled/uimd、enabled/sound` 放入测试 ini，
+      确认游戏内真实生效，并分别验证 Ares/Phobos 的同名配置不会被错误覆盖
+      （当前注入目录仅空 .gitkeep）。
+- [ ] 实测：Ares/Phobos 共存时确认 `0x679A1B` 能到达，且私有 include 只展开一次。
 
 ## dump
 
@@ -23,12 +38,20 @@
 
 ## 运行时（runtime）
 
-- [ ] 主循环 tick（取循环顶部，不取逻辑帧内部）
-- [ ] 热键轮询（GetAsyncKeyState 即可，不装键盘钩子）
-- [ ] 现读型属性改值（直接改 WeaponTypeClass 等字段）
-- [ ] 单位创建点：拷贝型属性对新单位生效
-  讨论结论：运行时能稳定改的偏 rules 里的现读字段，且不需要"那么多 inject 目标"，
-  所以运行时做成独立子系统，不复用 INI 注入框架。
+- [x] IDA 确认主循环外层回边；选择正常帧路径 `0x55DE3A`（6 字节完整指令）执行 `RuntimeTick`。
+- [x] `ReadDirectoryChangesW` + 500ms 默认 debounce + 写入稳定检查；worker 只投递命令。
+- [x] 战役/遭遇战硬门禁；LAN、Internet、录像/回放拒绝写入；离局自动回滚。
+- [x] 完整目标状态重建、语法验证、上一个有效状态恢复和删除键回滚。
+- [x] `RulesClass::Read_*` 与 `AbstractTypeClass::LoadFromINI` 路由；首次修改前用
+      `SaveToINI` 保存本局实际类型基线。
+- [x] `Immediate/FutureObjects/ControlledReload/RestartRequired` 分类；资源、布局、
+      类型注册和结构型字段拒绝强写。
+- [x] `ui/` WPF 控制面板 + `\\.\pipe\ra2hook-runtime-v1`：编辑、原子保存、应用、
+      暂停自动应用、回滚、旧/新值、安全等级与筛选。
+- [x] UI 本地 .NET 8 Release 编译及 win-x64 自包含单文件发布。
+- [?] DLL Action 编译：本机无 MSVC，需 CI 验证新增 C++ 文件。
+- [ ] 实机：验证 tick、watcher、类型 baseline、失败保留、删除回滚、离局回滚。
+- [ ] 实机：Ares / Phobos / 两者共存下验证原生和扩展字段边界。
 
 ## mix
 

@@ -3,7 +3,7 @@
 // 读 RA2 根目录下的 ra2hook.ini（不用 JSON：引擎自带 INI 解析器，
 // 而我们处在无异常、静态 CRT 环境，少一个解析器少一堆麻烦）。
 //
-// 配置缺失一律走安全默认值：dump 全关。理由见 DEVELOPMENT.md §5.2——
+// 配置缺失一律走安全默认值：dump/inject/runtime 全关。理由见 DEVELOPMENT.md §5.2——
 // 任何失败都不得阻止游戏启动。
 #pragma once
 
@@ -31,10 +31,12 @@ namespace Config {
         bool enabled = false;
 
         // 显式注入文件列表（逗号分隔，顺序即注入顺序，后者覆盖前者）。
-        // 只作用于 rules 目标（与旧版行为一致）。留空 = 自动按目标目录扫描：
+        // 支持多个文件，但只作用于 rules 目标（与旧版行为一致）。留空 = 自动按目标目录扫描：
         //   ra2hook/inject/enabled/rules/*.ini   -> INI_Rules
         //   ra2hook/inject/enabled/ra2md/*.ini   -> INI_RA2MD
-        //   ra2hook/inject/enabled/art|ai|uimd  -> 目标已注册，挂点未定(TODO)
+        //   ra2hook/inject/enabled/art|ai|uimd  -> 目标已注册（挂点见 Hooks.RulesInject.cpp）
+        //   ra2hook/inject/enabled/sound/*.ini  -> 栈上局部 SOUNDMD CCINIClass（0x52C796）
+        // 每个目录内按文件名（不区分大小写）排序，后写覆盖前写。
         char files[512] = {};
 
         // 是否把 ra2hook/inject/mix/*.mix 全部注册进引擎文件系统。
@@ -43,9 +45,19 @@ namespace Config {
         bool mix = false;
     };
 
+    struct RuntimeSettings {
+        // IPC is always available once ra2hook has initialized, but game data
+        // writes remain disabled unless this switch is enabled.
+        bool enabled = false;
+        bool autoApply = true;
+        int debounceMs = 500;
+        char directory[260] = "ra2hook\\runtime";
+    };
+
     struct Settings {
         DumpSettings   dump;
         InjectSettings inject;
+        RuntimeSettings runtime;
         int            logLevel = 3;   // 对应 Log::Level::Info
     };
 

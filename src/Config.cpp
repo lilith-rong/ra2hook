@@ -6,6 +6,7 @@
 #include <CCINIClass.h>
 #include <CCFileClass.h>
 
+#include <cstdio>
 #include <cstring>   // _stricmp
 
 #include "Config.h"
@@ -38,7 +39,8 @@ namespace Config {
 
         CCFileClass file(kFileName);
         if (!file.Exists()) {
-            Log::Info("Config: %s 不存在，全部功能保持默认（dump/inject 关闭）", kFileName);
+            Log::Info("Config: %s 不存在，全部功能保持默认（dump/inject/runtime 关闭）",
+                      kFileName);
             return;
         }
 
@@ -47,18 +49,19 @@ namespace Config {
         ini.ReadCCFile(&file);
 
         auto& d = s_settings.dump;
-        d.enabled     = ini.ReadBool("Dump", "Enabled",     d.enabled);
-        d.ini         = ini.ReadBool("Dump", "INI",         d.ini);
-        d.csf         = ini.ReadBool("Dump", "CSF",         d.csf);
-        d.vxl         = ini.ReadBool("Dump", "VXL",         d.vxl);
-        d.shp         = ini.ReadBool("Dump", "SHP",         d.shp);
-        d.sortByOwner   = ini.ReadBool("Dump", "SortByOwner",   d.sortByOwner);
-        d.stripInclude  = ini.ReadBool("Dump", "StripInclude",  d.stripInclude);
-
-        // OnlyUnits：逗号分隔的单位 ID 白名单，留空则全部导出。
-        // 这里用 ReadString 是安全的——[Dump] 段确实存在（文件存在才走到这），
-        // 段回退机制只在读**不存在的段**时才误导。
-        ini.ReadString("Dump", "OnlyUnits", "", d.onlyUnits, sizeof(d.onlyUnits));
+        if (FindSection(&ini, "Dump")) {
+            d.enabled       = ini.ReadBool("Dump", "Enabled", d.enabled);
+            d.ini           = ini.ReadBool("Dump", "INI", d.ini);
+            d.csf           = ini.ReadBool("Dump", "CSF", d.csf);
+            d.vxl           = ini.ReadBool("Dump", "VXL", d.vxl);
+            d.shp           = ini.ReadBool("Dump", "SHP", d.shp);
+            d.sortByOwner   = ini.ReadBool("Dump", "SortByOwner", d.sortByOwner);
+            d.stripInclude  = ini.ReadBool("Dump", "StripInclude", d.stripInclude);
+            ini.ReadString("Dump", "OnlyUnits", "", d.onlyUnits,
+                           sizeof(d.onlyUnits));
+        } else {
+            Log::Debug("Config: [Dump] 段不存在，dump 保持关闭");
+        }
 
         // [Inject]：段可能不存在（默认 ra2hook.ini 里就没有）。若不检查段存在性，
         // ReadBool/ReadString 会回退到 [Dump] 段，把 OnlyUnits 之类的值误读进来——
@@ -75,15 +78,34 @@ namespace Config {
             Log::Debug("Config: [Inject] 段不存在，inject 保持关闭");
         }
 
-        s_settings.logLevel       = ini.ReadInteger("Log", "Level", s_settings.logLevel);
+        auto& runtime = s_settings.runtime;
+        if (FindSection(&ini, "Runtime")) {
+            runtime.enabled = ini.ReadBool("Runtime", "Enabled", runtime.enabled);
+            runtime.autoApply = ini.ReadBool("Runtime", "AutoApply", runtime.autoApply);
+            runtime.debounceMs = ini.ReadInteger("Runtime", "DebounceMs",
+                                                 runtime.debounceMs);
+            ini.ReadString("Runtime", "Directory", runtime.directory,
+                           runtime.directory, sizeof(runtime.directory));
+            if (runtime.debounceMs < 100) runtime.debounceMs = 100;
+            if (runtime.debounceMs > 5000) runtime.debounceMs = 5000;
+            if (!runtime.directory[0])
+                std::snprintf(runtime.directory, sizeof(runtime.directory),
+                              "ra2hook\\runtime");
+        }
+
+        if (FindSection(&ini, "Log")) {
+            s_settings.logLevel = ini.ReadInteger("Log", "Level",
+                                                  s_settings.logLevel);
+        }
 
         Log::g_level = static_cast<Log::Level>(s_settings.logLevel);
 
-        Log::Info("Config: dump=%d (ini=%d csf=%d vxl=%d shp=%d sort=%d) inject=%d mix=%d",
+        Log::Info("Config: dump=%d (ini=%d csf=%d vxl=%d shp=%d sort=%d) inject=%d mix=%d runtime=%d auto=%d",
                   d.enabled ? 1 : 0, d.ini ? 1 : 0, d.csf ? 1 : 0,
                   d.vxl ? 1 : 0, d.shp ? 1 : 0, d.sortByOwner ? 1 : 0,
                   s_settings.inject.enabled ? 1 : 0,
-                  s_settings.inject.mix ? 1 : 0);
+                  s_settings.inject.mix ? 1 : 0,
+                  runtime.enabled ? 1 : 0, runtime.autoApply ? 1 : 0);
 
         if (d.onlyUnits[0])
             Log::Info("Config: OnlyUnits=[%s]（仅导出这些单位）", d.onlyUnits);

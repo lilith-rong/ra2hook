@@ -22,9 +22,12 @@
 #include "DumpIni.h"
 #include "DumpIO.h"
 #include "Logger.h"
+#include "Runtime.h"
 
 DEFINE_HOOK(0x668F6A, RA2Hook_DumpEntry, 0x5)
 {
+    Runtime::Initialize();
+
     static bool once = false;
     if (once) return 0;
     once = true;
