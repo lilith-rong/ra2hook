@@ -1,106 +1,282 @@
 # ra2hook
 
-通过 **Syringe** 注入《红色警戒 2：尤里的复仇》`gamemd.exe` 的 32 位 DLL 扩展，与 Ares / Phobos 并存。
+ra2hook 是面向《红色警戒 2：尤里的复仇》`gamemd.exe` 的 32 位 Syringe 扩展。
+它可以与 Ares、Phobos 共存，在游戏启动阶段追加独立 INI 覆盖层，并为单机游戏提供
+受约束的运行时 INI 热重载和可视化控制界面。
 
-**核心目标**：提供一套**独立于 Ares/Phobos `[#include]`** 的 rules 注入机制——在它们的 include 全部处理完之后，再加载用户指定的 ini，且互不干扰。
+项目的核心不是替代 Ares/Phobos，而是在它们完成原有 INI 处理后，再叠加 ra2hook
+自己的配置，同时避免干扰它们的 `[#include]` 链。
 
-完整设计见 **[DEVELOPMENT.md](./DEVELOPMENT.md)**。INI 注入的配置、目录、
-实机结果和排查方法见 **[INJECT_INI.md](./INJECT_INI.md)**；
-底层 IDA 依据与 Hook 分析见 **[INJECT_HOOK_ANALYSIS.md](./INJECT_HOOK_ANALYSIS.md)**。
-单机运行时热重载、回滚和外部 UI 见 **[RUNTIME_INI.md](./RUNTIME_INI.md)**。
-本文件讲怎么构建与运行。
+## 当前状态
 
----
+截至 2026-08-13：
 
-## 目录
+- GitHub Actions 可以构建 `ra2hook.dll`、PDB 和自包含的运行时 UI；
+- DLL 能够通过 Syringe 加载并与目标游戏版本共同运行；
+- `rules`/`art` 私有 INI 注入已通过实机验证，新增类型和目标规则已在游戏内生效；
+- 启动注入支持多个 INI、递归私有 include、MIX 内 INI 和缺失文件跳过；
+- 单机运行时系统、目录监视、事务式应用、回滚、命名管道和 WPF UI 已完成；
+- UI 支持新建、编辑、保存、重命名、启用/停用和删除运行时补丁；
+- INI、CSF、VXL、HVA、SHP 导出功能已实现。
 
-```
-ra2hook/
-├── DEVELOPMENT.md            # 设计文档（唯一事实来源）
-├── INJECT_HOOK_ANALYSIS.md   # 后置注入点分析与实机测试说明
-├── INJECT_INI.md             # INI 注入配置、实现边界与实机结果
-├── RUNTIME_INI.md            # 单机运行时 INI、回滚、UI 与测试说明
-├── README.md                 # 本文件
-├── ra2hook.sln               # 解决方案（Debug/DevBuild/Release，均 Win32）
-├── ra2hook.vcxproj           # 工程
-├── ra2hook.props             # 编译设置（改写自 yrpp-spawner，已知可用）
-├── ra2hook.ini               # 配置模板；CI 打包到 ra2hook/ra2hook.ini
-├── hooks.json                # v1 设计存档，程序不再读取（见 DEVELOPMENT §5.1）
-├── .gitmodules               # YRpp submodule
-├── .github/workflows/build.yml
-├── src/
-│   ├── Main.cpp              # DllMain
-│   ├── Logger.h              # 文件日志
-│   ├── Hooks.RulesInject.cpp # 启动阶段多目标 INI 注入
-│   └── Hooks.Runtime.cpp     # 每帧 RuntimeTick
-├── ui/                       # 独立 WPF/.NET 8 运行时控制面板
-├── runtime/                  # 运行时 patch 文件目录样例
-└── YRpp/                     # submodule，clone 后才有
+`ai`、`uimd`、`sound` 和 MIX 资源加载已经接入，但具体游戏内容仍应分别做专项测试。
+扩展在 Hook 之前已经缓存的字段，也不能依靠后置注入强制覆盖。
+
+## 支持环境
+
+当前 Hook 地址只针对以下 `gamemd.exe`：
+
+```text
+MD5:    56D582A1D6F3C144D3ADC867D7A4D91B
+SHA256: 7CD005D263FDE203D9C84548200A057A8DF61D724DA3C6BD1E521EEB61CD0747
 ```
 
----
+已验证环境包含 Ares 3.0p1 与 Phobos Build #47+6_0。更换 EXE、保护壳或大幅修改
+游戏主程序后，必须重新核对 Hook 地址、覆盖长度、寄存器约定和控制流。
 
-## 构建（纯 GitHub Actions，无需本地 VS）
+## 主要功能
 
-工程文件已完整放进仓库，`.github/workflows/build.yml` 在 `windows-latest` 上用 v143 工具集编译，push 即出 artifact。**不需要在本地装 Visual Studio。**
+### 启动阶段 INI 注入
 
-流程：
+注入目标由目录决定，不需要在 `ra2hook.ini` 中维护文件列表：
 
-1. 把本目录作为一个 git 仓库推到 GitHub。**YRpp 必须是 submodule**（`.gitmodules` 已配好）：
-   ```bash
-   git submodule add https://github.com/Phobos-developers/YRpp.git YRpp
-   git commit -am "add YRpp submodule"
-   git push
-   ```
-2. Actions 自动触发。绿勾后进 workflow 页，下 `ra2hook-<sha>` artifact，里面是 `ra2hook.dll`、PDB、自包含的 `ra2hook/ra2hook-ui.exe` 和 `ra2hook/ra2hook.ini`。将 artifact 解压到游戏目录后，UI 会和配置、日志、`dump`、`inject`、`runtime` 共用游戏目录下的 `ra2hook/` 文件夹。
-3. CI 已带 `submodules: recursive`，会自动拉 YRpp。
+| 目录 | 目标对象 | 状态 |
+|---|---|---|
+| `inject/enabled/rules` | `rulesmd.ini` / `INI_Rules` | 已实机验证 |
+| `inject/enabled/art` | `artmd.ini` / `INI_Art` | 已实机验证 |
+| `inject/enabled/ra2md` | `ra2md.ini` / `INI_RA2MD` | 已接入，有早期缓存限制 |
+| `inject/enabled/ai` | `aimd.ini` / `INI_AI` | 已接入，需专项测试 |
+| `inject/enabled/uimd` | `uimd.ini` / `INI_UIMD` | 已接入，扩展局部对象有限制 |
+| `inject/enabled/sound` | `soundmd.ini` 局部对象 | 两阶段注入，需专项测试 |
 
-> CI 只编译，**跑不了游戏**。测试要把 artifact 下载到本地 RA2 安装里手动验（下节）。这个"push→等→下载→本地测"的循环是纯 CI 方案的固有代价。
+每个目录都会按文件名顺序读取全部 `*.ini`，后合并的值覆盖先前值。入口 INI 可以
+使用 ra2hook 自己的 `[#include]`：
 
-### 本地构建（可选）
-
-若日后想本地快速迭代：VS Installer 导入 `.vsconfig`（见 DEVELOPMENT §2.4）装 C++ 工作负载，然后 `msbuild /p:Configuration=Release ra2hook.sln`，或直接开 `ra2hook.sln`。与 CI 用同一套工程文件。
-
----
-
-## 运行与验证（阶段 0 出口）
-
-1. 把 `ra2hook.dll` 放进 RA2 目录（与 `gamemd.exe`、Ares/Phobos 同级），并保留 artifact 中的 `ra2hook/ra2hook-ui.exe` 目录结构。UI 会自动把自身所在 `ra2hook/` 的上一级识别为游戏目录。
-2. 用 Syringe 启动游戏（`Syringe.exe "gamemd.exe" -SPAWN ...`，或你现有的启动器）。
-   - Syringe 会扫描目录内 DLL 的 `.syhks00` 段，自动应用我们的 hook。**无需 host 声明或握手**。
-3. 进入一场遭遇战，退出后看 `<游戏目录>\ra2hook\ra2hook.log`。
-
-DLL 以当前运行的游戏 EXE 路径确定游戏目录，不依赖进程名或启动器设置的当前工作
-目录。配置优先读取 `<游戏目录>\ra2hook\ra2hook.ini`；旧位置
-`<游戏目录>\ra2hook.ini` 仅作兼容回退。日志始终写入新目录，不写入旧位置。
-
-**当前候选挂点的日志标志**：日志里出现一行
-```
-[INFO] probe @0x679A1B: [RA2HookProbe]FromAresInclude=[...]
-```
-
-这一行直接回答核心设计的致命假设（DEVELOPMENT §4.4 / §6 待验证第 1 项）：
-
-- 方括号内是 **1** → `0x679A1B` 在 Ares include 之后，后置注入假设成立。
-- 方括号内 **空** → 先确认 Ares 原 include 链里确实放了下面的探针键；只有已配置仍为空，才说明需要回到 IDA 检查时序。
-
-配套：在一个由 Ares `[#include]` 引入的 ini 里放一个探针键
 ```ini
-[RA2HookProbe]
-FromAresInclude=1
+[#include]
++=units.ini
++=weapons.ini
++=balance.ini
 ```
 
----
+该 include 机制不调用可能已被 Ares Hook 的 `CCINIClass::ReadCCFile`，不会改写或
+重复展开 Ares/Phobos 的 include。`+=` 项使用 ra2hook 独立键名保存，不与它们的
+`var_N` 命名空间冲突。
 
-## 状态
+对 `rules` 新增的单位、建筑、武器、弹体等类型，ra2hook 会补跑原生注册逻辑，
+随后让游戏原流程读取类型定义，而不是只把文本写进 `CCINIClass`。
 
-- ✅ 设计已定（DEVELOPMENT.md v0.2）
-- ✅ 工程文件齐备，CI 编译通过
-- ✅ **dump 方向已实现**：INI/CSF/VXL/SHP/HVA 导出（`src/DumpIni.cpp` + `src/ArtMap.cpp`），已对真实 MO 数据核对
-- ✅ **inject 代码已支持多个 INI**：注入目标完全由 `enabled/<target>/` 子目录决定；目录内按文件名排序后逐个合并，后写覆盖前写；文件内 `[#include]` 由独立原始解析器展开，不经过 Ares/Phobos 的 `ReadCCFile` hook
-- ⬜ **inject 待复测**：主 rules 点为 `0x679A1B`，并在 `0x668EF5` 做原生类型加载后的只读诊断；sound 使用 `0x52C6C4` 预备覆盖层、`0x7510F6` 内存应用。当前游戏目录 DLL 仍是旧版。新 CI artifact 必须同时出现“已补注册”、`rules 全局段重读完成` 和 `0x668EF5 ... missing=0, untracked=0`，再用新增单位实际生产/开火确认；art/ai/uimd/sound 与 mix 仍需完成实机回归
-- ✅ **runtime 代码已实现**：`0x55DE3A` 游戏线程 tick、单机硬门禁、文件监视、完整状态重建、类型基线、回滚、命名管道和 `ui/` 外部控制面板
-- ✅ **UI 已本地构建**：.NET 8 Release 零警告，并通过 win-x64 自包含单文件发布
-- ⬜ **runtime DLL 待构建/实测**：本机没有 MSVC；tick、`LoadFromINI`/`SaveToINI`、Ares/Phobos 共存和实际字段效果必须用 Action artifact 在游戏中验证
+### 单机运行时补丁
 
-**下一步：Action 构建 → 下载 artifact → 先完成启动 inject 回归，再按 `RUNTIME_INI.md` 的顺序验证单机应用、拒绝项、失败保留、删除回滚和退出对局回滚。**
+运行时功能只允许战役和遭遇战。局域网、互联网和录像/回放会被硬阻止，离开单机
+对局时会自动回滚，避免不同玩家数据不一致导致崩溃。
+
+运行时管线：
+
+```text
+ra2hook/runtime/*.ini 或 UI 命令
+  -> 文件监视/命名管道线程
+  -> 有界命令队列
+  -> 游戏主线程 RuntimeTick
+  -> 完整目标状态重建与校验
+  -> 原生 RulesClass/TypeClass 读取路径
+```
+
+运行时不会在工作线程直接操作游戏对象。应用失败会保留上一代有效状态，删除文件或
+键会按本局首次修改前捕获的基线回滚。
+
+UI 中补丁状态对应文件后缀：
+
+```text
+name.ini           已启用，会被 DLL 合并
+name.ini.disabled  已停用，仍可编辑但不会被 DLL 合并
+```
+
+### Dump
+
+Dump 可以导出：
+
+- 引擎内存中已经合并完成的 rules/art/ai/uimd/ra2md INI；
+- CSF 字符串表；
+- VXL、HVA 和 SHP 资源；
+- 按单位归类或按 `OnlyUnits` 精确筛选的资源。
+
+导出的 INI 默认移除历史 `[#include]` 段，避免将快照重新交给 Ares 时再次展开。
+
+## 安装目录
+
+将 Action artifact 解压到游戏目录，并保持以下结构：
+
+```text
+<game>/
+|-- gamemd.exe
+|-- ra2hook.dll
+|-- ra2hook.pdb                 # 可选，仅调试需要
+`-- ra2hook/
+    |-- ra2hook.ini
+    |-- ra2hook-ui.exe
+    |-- ra2hook.log             # 首次运行后生成
+    |-- inject/
+    |   |-- enabled/
+    |   |   |-- rules/
+    |   |   |-- art/
+    |   |   |-- ra2md/
+    |   |   |-- ai/
+    |   |   |-- uimd/
+    |   |   `-- sound/
+    |   `-- mix/
+    |-- runtime/
+    `-- dump/
+```
+
+DLL、配置、日志和运行时目录都根据实际运行的游戏 EXE 路径定位，不依赖进程名或
+启动器设置的当前工作目录。配置优先读取 `<game>\ra2hook\ra2hook.ini`；仅在新
+路径不存在时兼容读取 `<game>\ra2hook.ini`。日志固定写入
+`<game>\ra2hook\ra2hook.log`。
+
+## 快速开始
+
+### 1. 启用启动注入
+
+编辑 `<game>\ra2hook\ra2hook.ini`：
+
+```ini
+[Inject]
+Enabled=yes
+Mix=yes
+
+[Log]
+Level=3
+```
+
+将入口文件放入对应目录，例如：
+
+```text
+<game>\ra2hook\inject\enabled\rules\index.ini
+```
+
+然后通过现有 Syringe/Ares/Phobos 启动链运行游戏。Syringe 会读取 DLL 的
+`.syhks00` 段并安装 Hook，不需要额外握手配置。
+
+### 2. 启用运行时 UI
+
+在同一配置中设置：
+
+```ini
+[Runtime]
+Enabled=yes
+AutoApply=yes
+Directory=ra2hook\runtime
+DebounceMs=500
+```
+
+`Enabled` 只在 DLL 初始化时读取，修改后必须完整重启游戏。进入战役或遭遇战后运行：
+
+```text
+<game>\ra2hook\ra2hook-ui.exe
+```
+
+UI 自动将自身目录的上一级识别为游戏目录，也可以手动选择。创建或编辑补丁后可直接
+应用、回滚或开启自动应用。复选框用于单独启用/停用每个补丁。
+
+### 3. 启用 Dump
+
+```ini
+[Dump]
+Enabled=yes
+INI=yes
+CSF=yes
+VXL=no
+SHP=no
+SortByOwner=yes
+OnlyUnits=
+StripInclude=yes
+```
+
+Dump 会增加启动时间和磁盘占用，不使用时建议将 `Enabled` 改为 `no`。
+
+## 构建
+
+项目以 GitHub Actions 为正式构建方式：
+
+1. 仓库包含 YRpp submodule；
+2. push 到 `main`、`master` 或 `develop`，也可手动运行 workflow；
+3. Action 使用 MSBuild/v143 构建 Win32 DLL；
+4. 使用 .NET 8 发布自包含的 `win-x64` 单文件 UI；
+5. 下载名为 `ra2hook-<commit>` 的 artifact。
+
+Action 产物包含：
+
+```text
+ra2hook.dll
+ra2hook.pdb
+ra2hook/ra2hook-ui.exe
+ra2hook/ra2hook.ini
+```
+
+CI 只能验证编译和打包，无法代替真实游戏、Ares、Phobos 与具体 MOD 内容测试。
+
+## 常见问题
+
+| 现象 | 检查项 |
+|---|---|
+| 完全没有日志 | DLL 是否与 `gamemd.exe` 同级；Syringe 是否加载 DLL |
+| 找不到配置 | 使用 `<game>\ra2hook\ra2hook.ini`；查看日志中的 `Config: 已加载` |
+| 没有 inject 日志 | `[Inject] Enabled=yes`；文件是否在正确目标目录 |
+| include 文件缺失 | 检查相对路径、MIX 注册、文件名；缺失项会告警并跳过 |
+| INI 已合并但新增单位不存在 | 检查类型列表、`missing` 日志、生产条件和科技条件 |
+| UI 显示运行时未启用 | `[Runtime] Enabled=yes` 后完整重启游戏 |
+| UI 显示未连接 | 游戏是否运行；DLL/UI 是否来自同一次 artifact；游戏目录是否选对 |
+| UI 显示连接权限不足 | 更新同一 artifact 中的 DLL/UI；新管道允许本机普通 UI 连接提权游戏 |
+| 补丁显示停用 | 文件后缀为 `.ini.disabled`，勾选后恢复为 `.ini` |
+| 运行时键被拒绝 | 查看安全等级；结构、资源和类型注册改动需要重启游戏 |
+| Ares/Phobos 扩展字段未生效 | 该字段可能在 ra2hook Hook 之前已被扩展缓存 |
+
+## 设计边界
+
+- 运行时写入只支持单机，不支持多人或录像；
+- 运行时不能安全创建新类型，也不能热替换图像、体素、运动方式、Foundation 等结构；
+- Ares/Phobos 私有字段只有在对应扩展后续仍会读取时才可能生效；
+- `ra2md` 后置注入不能覆盖 Phobos 已提前读取的启动配置；
+- `uimd` 全局对象不能保证覆盖扩展重新打开的局部 UI 配置；
+- MIX 同名资源的最终查找优先级由游戏文件系统决定，建议使用唯一资源名；
+- PDB 不参与运行，只有调试崩溃和符号定位时需要。
+
+## 文档索引
+
+- [PROJECT_KEY_POINTS.md](./PROJECT_KEY_POINTS.md)：项目完成关键点、技术决策与维护清单
+- [INJECT_INI.md](./INJECT_INI.md)：启动注入用法、实机结果和排查
+- [INJECT_HOOK_ANALYSIS.md](./INJECT_HOOK_ANALYSIS.md)：IDA、Hook 地址和冲突分析
+- [RUNTIME_INI.md](./RUNTIME_INI.md)：运行时架构、安全分级与测试边界
+- [DEVELOPMENT.md](./DEVELOPMENT.md)：完整开发过程和底层设计
+- [TODO.md](./TODO.md)：非核心扩展项和专项验证记录
+
+## 源码结构
+
+```text
+src/
+|-- Hooks.RulesInject.cpp  启动阶段多目标注入与类型补注册
+|-- IniOverlay.cpp         独立 INI/include 解析和事务式合并
+|-- Hooks.Runtime.cpp      游戏主线程 Tick Hook
+|-- Runtime.cpp            安全分类、应用、基线和回滚
+|-- RuntimeWatcher.cpp     文件系统监视
+|-- RuntimeProtocol.cpp    命名管道协议
+|-- Hooks.Dump.cpp         Dump 入口
+|-- DumpIni.cpp            INI/CSF 导出
+|-- ArtMap.cpp             VXL/HVA/SHP 映射与导出
+|-- Config.cpp             配置读取
+|-- GamePaths.h            以游戏 EXE 为基准的路径和 IPC 名称
+`-- Logger.h               文件日志
+
+ui/
+|-- MainWindow.xaml        WPF 界面
+|-- MainWindow.xaml.cs     补丁文件管理和运行时操作
+|-- Services/PipeClient.cs IPC 客户端
+`-- Services/IniDocument.cs 配置和补丁辅助逻辑
+```
+
+## 项目结论
+
+ra2hook 已完成最初目标：在不接管 Ares/Phobos include 系统的前提下，为目标游戏提供
+可组合的后置 INI 注入，并扩展出受安全约束的单机运行时修改、可视化控制和资源导出。
+后续工作应以兼容性回归和特定目标专项测试为主，不再需要改变当前总体架构。
