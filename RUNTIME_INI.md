@@ -10,7 +10,7 @@ Implemented:
 
 - external WPF control panel under `ui/`;
 - `ReadDirectoryChangesW` monitoring with debounce and stable-write checks;
-- named-pipe IPC at `\\.\pipe\ra2hook-runtime-v1`;
+- game-directory-scoped named-pipe IPC (`ra2hook-runtime-v1-<path hash>`);
 - game-thread command queue and `RuntimeTick`;
 - campaign/skirmish-only hard gate;
 - full desired-state rebuild, validation, rollback, and last-valid-state restore;
@@ -103,6 +103,18 @@ repeated `+=file.ini` keys), later values
 winning. Include cycles, missing files, malformed lines, and depth over 32 reject
 the reload transaction. Startup inject also stages each source file before copying
 it to an engine INI, so a failed include tree cannot leave a half-merged file.
+
+The UI lists active `name.ini` and inactive `name.ini.disabled` files. Its
+checkbox enables or disables a patch by changing only this suffix, and the name
+field renames the selected patch without changing its enabled state. Disabled
+files remain editable but are excluded from the DLL's `*.ini` merge scan.
+
+The pipe grants local authenticated users read/write access and rejects remote
+clients, so a normal UI can connect when a launcher runs the game elevated. The
+directory hash prevents another RA2 installation from being mistaken for the
+selected game. The hashed name is an IPC contract change, so replace both DLL
+and UI from the same artifact. An old elevated DLL can still return
+`Access denied` to an old non-elevated UI.
 
 ## 5. Safety classes
 

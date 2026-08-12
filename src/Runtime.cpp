@@ -69,6 +69,7 @@ namespace {
     bool s_initialized = false;
     bool s_wasAllowed = false;
     char s_runtimeDirectory[IniOverlay::kPathMax] = {};
+    char s_pipeName[96] = "\\\\.\\pipe\\ra2hook-runtime-v1";
 
     QueuedCommand s_queue[kQueueCapacity] = {};
     int s_queueHead = 0;
@@ -659,6 +660,11 @@ const char* SafetyName(Safety safety)
     }
 }
 
+const char* PipeName()
+{
+    return s_pipeName;
+}
+
 void Initialize()
 {
     if (s_initialized) return;
@@ -668,6 +674,9 @@ void Initialize()
 
     Config::Load();
     const auto& config = Config::Get().runtime;
+    if (!GamePaths::BuildRuntimePipeName(s_pipeName, sizeof(s_pipeName))) {
+        Log::Warn("runtime: 无法生成游戏目录专用管道名，使用兼容名称");
+    }
     const bool directoryReady = GamePaths::Resolve(
         s_runtimeDirectory, sizeof(s_runtimeDirectory), config.directory);
     if (directoryReady) {
@@ -691,7 +700,7 @@ void Initialize()
         RuntimeWatcher::Start(s_runtimeDirectory, config.debounceMs);
     Log::Info("runtime: initialized enabled=%d auto=%d dir=%s pipe=%s",
               s_snapshot.enabled ? 1 : 0, config.autoApply ? 1 : 0,
-              s_snapshot.directory, kPipeName);
+              s_snapshot.directory, PipeName());
 }
 
 bool Queue(Command command, bool argument)

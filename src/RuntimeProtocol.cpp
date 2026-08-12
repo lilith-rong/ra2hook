@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <sddl.h>
 
 #include <cstdio>
 #include <cstring>
@@ -137,12 +138,30 @@ namespace {
     DWORD WINAPI PipeThread(void*)
     {
         for (;;) {
-            HANDLE pipe = CreateNamedPipeA(Runtime::kPipeName,
+            PSECURITY_DESCRIPTOR descriptor = nullptr;
+            SECURITY_ATTRIBUTES security = {};
+            SECURITY_ATTRIBUTES* securityPointer = nullptr;
+            if (ConvertStringSecurityDescriptorToSecurityDescriptorA(
+                    "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)S:(ML;;NW;;;LW)",
+                    SDDL_REVISION_1, &descriptor, nullptr)) {
+                security.nLength = sizeof(security);
+                security.lpSecurityDescriptor = descriptor;
+                security.bInheritHandle = FALSE;
+                securityPointer = &security;
+            } else {
+                Log::Warn("runtime pipe: security descriptor failed (%lu)",
+                          GetLastError());
+            }
+
+            HANDLE pipe = CreateNamedPipeA(Runtime::PipeName(),
                 PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, nullptr);
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+                    PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, securityPointer);
+            if (descriptor) LocalFree(descriptor);
             if (pipe == INVALID_HANDLE_VALUE) {
-                Log::Error("runtime pipe: CreateNamedPipe failed (%lu)", GetLastError());
+                Log::Error("runtime pipe: CreateNamedPipe failed for %s (%lu)",
+                           Runtime::PipeName(), GetLastError());
                 Sleep(1000);
                 continue;
             }

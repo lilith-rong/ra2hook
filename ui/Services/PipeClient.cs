@@ -7,11 +7,29 @@ namespace RA2Hook.RuntimeUI.Services;
 
 public sealed class PipeClient
 {
-    private const string PipeName = "ra2hook-runtime-v1";
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private string _pipeName = "ra2hook-runtime-v1";
+
+    public void SetGameRoot(string gameRoot)
+    {
+        var normalized = Path.GetFullPath(gameRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        uint hash = 2166136261;
+        foreach (var character in normalized)
+        {
+            var value = character is >= 'a' and <= 'z'
+                ? character - ('a' - 'A')
+                : character;
+            hash ^= (byte)(value & 0xFF);
+            hash *= 16777619;
+            hash ^= (byte)(value >> 8);
+            hash *= 16777619;
+        }
+        _pipeName = $"ra2hook-runtime-v1-{hash:X8}";
+    }
 
     public async Task<IReadOnlyList<string[]>> SendAsync(
-        string command, int timeoutMs = 500, CancellationToken cancellationToken = default)
+        string command, int timeoutMs = 1500, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
         try
@@ -19,14 +37,23 @@ public sealed class PipeClient
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(timeoutMs);
             await using var pipe = new NamedPipeClientStream(
-                ".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            await pipe.ConnectAsync(timeout.Token);
+                ".", _pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            try
+            {
+                await pipe.ConnectAsync(timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"未找到当前游戏目录的运行时管道: {_pipeName}");
+            }
 
-            await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true)
+            await using var writer = new StreamWriter(
+                pipe, new UTF8Encoding(false), 1024, leaveOpen: true)
             {
                 AutoFlush = true
             };
-            using var reader = new StreamReader(pipe, Encoding.UTF8, true, 1024, leaveOpen: true);
+            using var reader = new StreamReader(
+                pipe, Encoding.UTF8, true, 1024, leaveOpen: true);
             await writer.WriteLineAsync(command);
 
             var rows = new List<string[]>();

@@ -13,7 +13,7 @@ namespace RA2Hook.RuntimeUI;
 public partial class MainWindow : Window
 {
     private readonly PipeClient _pipe = new();
-    private readonly ObservableCollection<FileInfo> _files = new();
+    private readonly ObservableCollection<RuntimePatchFile> _files = new();
     private readonly ObservableCollection<RuntimeItem> _items = new();
     private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private FileSystemWatcher? _watcher;
@@ -65,11 +65,12 @@ public partial class MainWindow : Window
     private void ConfigureRoot()
     {
         _gameRoot = Path.GetFullPath(GameRootText.Text.Trim());
+        _pipe.SetGameRoot(_gameRoot);
         _runtimeDirectory = IniDocument.ResolveRuntimeDirectory(_gameRoot);
         RuntimePathText.Text = _runtimeDirectory;
         _watcher?.Dispose();
         Directory.CreateDirectory(_runtimeDirectory);
-        _watcher = new FileSystemWatcher(_runtimeDirectory, "*.ini")
+        _watcher = new FileSystemWatcher(_runtimeDirectory)
         {
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
             IncludeSubdirectories = false,
@@ -84,6 +85,10 @@ public partial class MainWindow : Window
 
     private void FilesChanged(object sender, FileSystemEventArgs args)
     {
+        var relevant = RuntimePatchFile.IsPatchPath(args.FullPath) ||
+                       args is RenamedEventArgs renamed &&
+                       RuntimePatchFile.IsPatchPath(renamed.OldFullPath);
+        if (!relevant) return;
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_editorDirty)
@@ -100,18 +105,22 @@ public partial class MainWindow : Window
         if (!Directory.Exists(_runtimeDirectory)) return;
         var selected = _selectedPath;
         _files.Clear();
-        foreach (var path in Directory.EnumerateFiles(_runtimeDirectory, "*.ini")
-                     .OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
-            _files.Add(new FileInfo(path));
+        foreach (var file in Directory.EnumerateFiles(_runtimeDirectory)
+                     .Where(RuntimePatchFile.IsPatchPath)
+                     .Select(RuntimePatchFile.FromPath)
+                     .OrderBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
+                     .ThenByDescending(value => value.IsEnabled))
+            _files.Add(file);
         var next = _files.FirstOrDefault(value => value.FullName.Equals(selected,
             StringComparison.OrdinalIgnoreCase)) ?? _files.FirstOrDefault();
         FilesList.SelectedItem = next;
+        if (next is null) SetSelectedPatch(null);
     }
 
     private async void PatchSelected(object sender, System.Windows.Controls.SelectionChangedEventArgs args)
     {
         if (_suppressSelection) return;
-        if (FilesList.SelectedItem is not FileInfo file) return;
+        if (FilesList.SelectedItem is not RuntimePatchFile file) return;
         if (_editorDirty && _selectedPath is not null &&
             !file.FullName.Equals(_selectedPath, StringComparison.OrdinalIgnoreCase))
         {
@@ -129,6 +138,7 @@ public partial class MainWindow : Window
                 StringComparison.OrdinalIgnoreCase)) return;
 
         _selectedPath = file.FullName;
+        SetSelectedPatch(file);
         _loadingEditor = true;
         try
         {
@@ -147,6 +157,14 @@ public partial class MainWindow : Window
         {
             _loadingEditor = false;
         }
+    }
+
+    private void SetSelectedPatch(RuntimePatchFile? file)
+    {
+        PatchNameText.Text = file?.Name ?? string.Empty;
+        PatchNameText.IsEnabled = file is not null;
+        RenameButton.IsEnabled = file is not null;
+        if (file is null) SelectedFileText.Text = "未选择文件";
     }
 
     private void EditorChanged(object sender, System.Windows.Controls.TextChangedEventArgs args)
@@ -181,11 +199,11 @@ public partial class MainWindow : Window
         try
         {
             var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            var path = Path.Combine(_runtimeDirectory, $"patch-{timestamp}.ini");
+            var name = $"patch-{timestamp}";
             var suffix = 1;
-            while (File.Exists(path))
-                path = Path.Combine(_runtimeDirectory,
-                    $"patch-{timestamp}-{suffix++}.ini");
+            while (PatchNameExists(name))
+                name = $"patch-{timestamp}-{suffix++}";
+            var path = RuntimePatchFile.BuildPath(_runtimeDirectory, name, true);
             await IniDocument.WriteAtomicAsync(path,
                 "; RA2Hook runtime patch\r\n[General]\r\n");
             _editorDirty = false;
@@ -196,6 +214,105 @@ public partial class MainWindow : Window
         {
             StatusText.Text = $"新建失败: {exception.Message}";
         }
+    }
+
+    private bool PatchNameExists(string name) =>
+        File.Exists(RuntimePatchFile.BuildPath(_runtimeDirectory, name, true)) ||
+        File.Exists(RuntimePatchFile.BuildPath(_runtimeDirectory, name, false));
+
+    private void RenamePatch(object sender, RoutedEventArgs args)
+    {
+        if (FilesList.SelectedItem is not RuntimePatchFile file) return;
+        var name = NormalizePatchName(PatchNameText.Text);
+        if (name is null)
+        {
+            StatusText.Text = "名称不能为空，且不能包含路径或非法文件名字符";
+            PatchNameText.Focus();
+            return;
+        }
+        MovePatch(file, name, file.IsEnabled, "已重命名");
+    }
+
+    private void PatchEnabledChanged(object sender, RoutedEventArgs args)
+    {
+        if (sender is not System.Windows.Controls.CheckBox { Tag: RuntimePatchFile file } checkBox)
+            return;
+        var enabled = checkBox.IsChecked == true;
+        if (enabled == file.IsEnabled) return;
+        if (!MovePatch(file, file.Name, enabled, enabled ? "补丁已启用" : "补丁已停用"))
+            checkBox.IsChecked = file.IsEnabled;
+    }
+
+    private bool MovePatch(RuntimePatchFile file, string name, bool enabled, string message)
+    {
+        var target = RuntimePatchFile.BuildPath(_runtimeDirectory, name, enabled);
+        if (file.FullName.Equals(target, StringComparison.Ordinal))
+        {
+            StatusText.Text = "名称没有变化";
+            return true;
+        }
+        var counterpart = RuntimePatchFile.BuildPath(_runtimeDirectory, name, !enabled);
+        var targetTaken = File.Exists(target) &&
+            !file.FullName.Equals(target, StringComparison.OrdinalIgnoreCase);
+        var counterpartTaken = File.Exists(counterpart) &&
+            !file.FullName.Equals(counterpart, StringComparison.OrdinalIgnoreCase);
+        if (targetTaken || counterpartTaken)
+        {
+            StatusText.Text = $"已存在同名补丁: {name}";
+            return false;
+        }
+
+        try
+        {
+            if (file.FullName.Equals(target, StringComparison.OrdinalIgnoreCase))
+            {
+                var temporary = file.FullName + ".rename." + Guid.NewGuid().ToString("N");
+                File.Move(file.FullName, temporary);
+                try
+                {
+                    File.Move(temporary, target);
+                }
+                catch
+                {
+                    File.Move(temporary, file.FullName);
+                    throw;
+                }
+            }
+            else
+            {
+                File.Move(file.FullName, target);
+            }
+
+            if (_selectedPath?.Equals(file.FullName, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _selectedPath = target;
+                SelectedFileText.Text = target;
+                PatchNameText.Text = name;
+            }
+            RefreshFiles();
+            StatusText.Text = message;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"修改补丁失败: {exception.Message}";
+            return false;
+        }
+    }
+
+    private static string? NormalizePatchName(string input)
+    {
+        var name = input.Trim();
+        if (name.EndsWith(".ini.disabled", StringComparison.OrdinalIgnoreCase))
+            name = name[..^".ini.disabled".Length];
+        else if (name.EndsWith(".ini", StringComparison.OrdinalIgnoreCase))
+            name = name[..^".ini".Length];
+        name = name.Trim();
+        if (name.Length == 0 || name is "." or ".." ||
+            name.EndsWith(' ') || name.EndsWith('.') ||
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            return null;
+        return name;
     }
 
     private void DeletePatch(object sender, RoutedEventArgs args)
@@ -236,8 +353,7 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            ConnectionText.Text = "未连接";
-            StatusText.Text = $"命令失败: {exception.Message}";
+            ShowConnectionFailure(exception, "命令失败");
         }
     }
 
@@ -263,7 +379,7 @@ public partial class MainWindow : Window
             StatusText.Text = status.Message;
             KeyCountText.Text = $"代数 {status.Generation}  已应用 {status.AppliedKeys}  拒绝 {status.RejectedKeys}";
             if (status.Generation != _lastGeneration || status.Message != _lastMessage ||
-                _items.Count == 0)
+                _lastGeneration < 0)
             {
                 var inspect = await _pipe.SendAsync("INSPECT");
                 _items.Clear();
@@ -275,15 +391,31 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             _syncingAuto = false;
-            ConnectionText.Text = "未连接";
-            ConnectionText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Colors.Gray);
+            ShowConnectionFailure(exception, "等待游戏连接");
             ApplyPatchButtonState(false);
-            StatusText.Text = "等待游戏连接";
-            LogText.Text = exception.Message;
         }
         ApplyPatchButtonState(connected);
         _polling = false;
+    }
+
+    private void ShowConnectionFailure(Exception exception, string context)
+    {
+        var permissionDenied = exception is UnauthorizedAccessException ||
+            exception.Message.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+            exception.Message.Contains("拒绝", StringComparison.OrdinalIgnoreCase);
+        var runtimeDisabled = IniDocument.ReadRuntimeEnabled(_gameRoot) == false;
+        ConnectionText.Text = permissionDenied ? "连接权限不足" :
+                              runtimeDisabled ? "运行时未启用" : "未连接";
+        ConnectionText.Foreground = new System.Windows.Media.SolidColorBrush(
+            permissionDenied ? System.Windows.Media.Colors.Firebrick :
+            runtimeDisabled ? System.Windows.Media.Colors.DarkOrange :
+                              System.Windows.Media.Colors.Gray);
+        StatusText.Text = permissionDenied
+            ? "游戏与 UI 权限不同；新版本 DLL 会允许本机 UI 连接"
+            : runtimeDisabled
+            ? "请将 ra2hook.ini 的 [Runtime] Enabled 改为 yes，然后重启游戏"
+            : context;
+        LogText.Text = exception.Message;
     }
 
     private void ApplyPatchButtonState(bool connected)

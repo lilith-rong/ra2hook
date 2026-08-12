@@ -668,6 +668,11 @@ int ScanDirectory(const char* dir, const char* wildcard,
     int count = 0;
     do {
         if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (_stricmp(wildcard, "*.ini") == 0) {
+            const size_t length = std::strlen(data.cFileName);
+            if (length < 4 || _stricmp(data.cFileName + length - 4, ".ini") != 0)
+                continue;
+        }
         if (count < kMaxFiles) {
             std::snprintf(files[count], kPathMax, "%s\\%s", dir, data.cFileName);
         }

@@ -92,7 +92,25 @@
           <TextBlock DockPanel.Dock="Top" Text="运行时补丁" FontWeight="SemiBold"
                      Padding="10,9" Background="#F7F8FA" />
           <ListBox x:Name="FilesList" SelectionChanged="PatchSelected"
-                   BorderThickness="0" Padding="4" DisplayMemberPath="Name" />
+                   BorderThickness="0" Padding="4">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Grid MinHeight="28">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                            Tag="{Binding}" Click="PatchEnabledChanged"
+                            ToolTip="启用或停用此补丁" VerticalAlignment="Center"
+                            Margin="3,0,7,0" />
+                  <TextBlock Grid.Column="1" Text="{Binding DisplayName}"
+                             TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
         </DockPanel>
       </Border>
 
@@ -106,8 +124,20 @@
               <RowDefinition Height="Auto" />
               <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <TextBlock x:Name="SelectedFileText" Padding="10,7" Foreground="#6B7280"
-                       Text="未选择文件" />
+            <Grid Margin="10,5">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="180" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock x:Name="SelectedFileText" Foreground="#6B7280"
+                         Text="未选择文件" TextTrimming="CharacterEllipsis"
+                         VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBox x:Name="PatchNameText" Grid.Column="1" MinHeight="27"
+                       VerticalContentAlignment="Center" IsEnabled="False" />
+              <Button x:Name="RenameButton" Grid.Column="2" Content="重命名"
+                      Click="RenamePatch" IsEnabled="False" Margin="8,0,0,0" />
+            </Grid>
             <TextBox x:Name="EditorText" Grid.Row="1" AcceptsReturn="True"
                      AcceptsTab="True" VerticalScrollBarVisibility="Auto"
                      HorizontalScrollBarVisibility="Auto" TextChanged="EditorChanged"

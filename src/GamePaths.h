@@ -5,8 +5,25 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 
 namespace GamePaths {
+
+    inline bool ExecutableDirectory(wchar_t* output, size_t capacity)
+    {
+        if (!output || capacity == 0 || capacity > MAXDWORD) return false;
+
+        const DWORD length = GetModuleFileNameW(
+            nullptr, output, static_cast<DWORD>(capacity));
+        if (length == 0 || length >= capacity) return false;
+
+        wchar_t* slash = std::wcsrchr(output, L'\\');
+        wchar_t* alternate = std::wcsrchr(output, L'/');
+        if (!slash || (alternate && alternate > slash)) slash = alternate;
+        if (!slash) return false;
+        *slash = L'\0';
+        return true;
+    }
 
     inline bool IsAbsolute(const char* path)
     {
@@ -47,6 +64,27 @@ namespace GamePaths {
         if (!IsAbsolute(path)) return Build(output, capacity, path);
 
         const int written = std::snprintf(output, capacity, "%s", path);
+        return written > 0 && static_cast<size_t>(written) < capacity;
+    }
+
+    inline bool BuildRuntimePipeName(char* output, size_t capacity)
+    {
+        wchar_t directory[MAX_PATH] = {};
+        if (!ExecutableDirectory(directory, sizeof(directory) / sizeof(directory[0])))
+            return false;
+
+        unsigned int hash = 2166136261u;
+        for (const wchar_t* cursor = directory; *cursor; ++cursor) {
+            unsigned int value = static_cast<unsigned int>(*cursor);
+            if (value >= L'a' && value <= L'z') value -= L'a' - L'A';
+            hash ^= value & 0xFFu;
+            hash *= 16777619u;
+            hash ^= (value >> 8) & 0xFFu;
+            hash *= 16777619u;
+        }
+
+        const int written = std::snprintf(
+            output, capacity, "\\\\.\\pipe\\ra2hook-runtime-v1-%08X", hash);
         return written > 0 && static_cast<size_t>(written) < capacity;
     }
 

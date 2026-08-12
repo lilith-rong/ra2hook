@@ -56,7 +56,7 @@
       `SaveToINI` 保存本局实际类型基线。
 - [x] `Immediate/FutureObjects/ControlledReload/RestartRequired` 分类；资源、布局、
       类型注册和结构型字段拒绝强写。
-- [x] `ui/` WPF 控制面板 + `\\.\pipe\ra2hook-runtime-v1`：编辑、原子保存、应用、
+- [x] `ui/` WPF 控制面板 + 游戏目录专用命名管道：编辑、原子保存、应用、
       暂停自动应用、回滚、旧/新值、安全等级与筛选。
 - [x] UI 本地 .NET 8 Release 编译及 win-x64 自包含单文件发布。
 - [?] DLL Action 编译：本机无 MSVC，需 CI 验证新增 C++ 文件。

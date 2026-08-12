@@ -44,10 +44,9 @@ namespace Runtime {
         char lastMessage[256] = {};
     };
 
-    constexpr const char* kPipeName = "\\\\.\\pipe\\ra2hook-runtime-v1";
-
     void Initialize();
     void Tick();
+    const char* PipeName();
 
     bool Queue(Command command, bool argument = false);
     void NotifyFilesChanged();

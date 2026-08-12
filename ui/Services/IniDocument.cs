@@ -71,15 +71,44 @@ public static class IniDocument
 
     public static string ResolveRuntimeDirectory(string gameRoot)
     {
-        var primaryConfig = Path.Combine(gameRoot, "ra2hook", "ra2hook.ini");
-        var legacyConfig = Path.Combine(gameRoot, "ra2hook.ini");
-        var configPath = File.Exists(primaryConfig) ? primaryConfig : legacyConfig;
+        var configPath = ResolveConfigPath(gameRoot);
         var configured = ReadRuntimeDirectory(configPath);
         return Path.GetFullPath(Path.Combine(gameRoot,
             string.IsNullOrWhiteSpace(configured) ? Path.Combine("ra2hook", "runtime") : configured));
     }
 
-    private static string? ReadRuntimeDirectory(string configPath)
+    public static bool? ReadRuntimeEnabled(string gameRoot)
+    {
+        var configPath = ResolveConfigPath(gameRoot);
+        if (!File.Exists(configPath)) return null;
+        try
+        {
+            var value = ReadRuntimeValue(configPath, "Enabled");
+            if (value is null) return null;
+            return value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                   value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1";
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static string ResolveConfigPath(string gameRoot)
+    {
+        var primaryConfig = Path.Combine(gameRoot, "ra2hook", "ra2hook.ini");
+        var legacyConfig = Path.Combine(gameRoot, "ra2hook.ini");
+        return File.Exists(primaryConfig) ? primaryConfig : legacyConfig;
+    }
+
+    private static string? ReadRuntimeDirectory(string configPath) =>
+        ReadRuntimeValue(configPath, "Directory");
+
+    private static string? ReadRuntimeValue(string configPath, string key)
     {
         if (!File.Exists(configPath)) return null;
         var section = string.Empty;
@@ -93,7 +122,7 @@ public static class IniDocument
             }
             if (!section.Equals("Runtime", StringComparison.OrdinalIgnoreCase)) continue;
             var equal = trimmed.IndexOf('=');
-            if (equal > 0 && trimmed[..equal].Trim().Equals("Directory",
+            if (equal > 0 && trimmed[..equal].Trim().Equals(key,
                     StringComparison.OrdinalIgnoreCase))
                 return trimmed[(equal + 1)..].Trim();
         }
