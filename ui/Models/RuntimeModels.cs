@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace RA2Hook.RuntimeUI.Models;
 
 public sealed record RuntimePatchFile(string FullName, string Name, bool IsEnabled)
