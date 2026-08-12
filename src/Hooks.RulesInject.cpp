@@ -101,7 +101,8 @@ namespace RulesInject {
 
         CCINIClass staging;
         IniOverlay::MergeStats stats;
-        const int keys = IniOverlay::MergeFile(&staging, path, &stats, "inject");
+        const int keys = IniOverlay::MergeFile(&staging, path, &stats,
+                                               "inject", true);
         if (keys < 0 || stats.errors > 0) {
             Log::Warn("inject: rejected %s: %s", path,
                       stats.firstError[0] ? stats.firstError : "read/parse failure");
@@ -114,7 +115,12 @@ namespace RulesInject {
                       stats.firstWarning[0] ? stats.firstWarning : "ignored INI issue");
         }
 
-        IniOverlay::Copy(pTarget, &staging);
+        if (stats.appends > 0) {
+            Log::Info("inject: %s preserved %d += append item(s)",
+                      path, stats.appends);
+        }
+
+        IniOverlay::Copy(pTarget, &staging, false, true);
         return keys;
     }
 
@@ -364,7 +370,7 @@ namespace RulesInject {
         }
 
         const int before = CountSections(pSoundIni);
-        IniOverlay::Copy(pSoundIni, s_sound_overlay);
+        IniOverlay::Copy(pSoundIni, s_sound_overlay, false, true);
         Log::Info("inject apply @0x7510F6: SOUNDMD 覆盖已应用到 %p（段数 %d->%d）",
                   static_cast<void*>(pSoundIni), before, CountSections(pSoundIni));
     }

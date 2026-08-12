@@ -17,6 +17,8 @@ namespace {
     constexpr int kMaxIniBytes = 8 * 1024 * 1024;
     constexpr int kIniTokenMax = 512;
     constexpr int kMaxIncludeDepth = 32;
+    constexpr const char* kAppendKeyPrefix = "__RA2HOOK_APPEND_";
+    constexpr const char* kOutputAppendKeyPrefix = "RA2Hook_";
 
     const char* Tag(const char* tag)
     {
@@ -184,6 +186,90 @@ namespace {
                section[0];
     }
 
+    bool IsAppendMarker(const char* key)
+    {
+        return key && _stricmp(key, "+") == 0;
+    }
+
+    bool IsSyntheticAppendKey(const char* key)
+    {
+        return key && _strnicmp(key, kAppendKeyPrefix,
+                                std::strlen(kAppendKeyPrefix)) == 0;
+    }
+
+    bool ReadAppendIndex(const char* key, unsigned int* result)
+    {
+        const size_t prefixLength = std::strlen(kOutputAppendKeyPrefix);
+        if (!key || !result || _strnicmp(key, kOutputAppendKeyPrefix,
+                                          prefixLength) != 0 ||
+            !key[prefixLength]) {
+            return false;
+        }
+
+        unsigned int value = 0;
+        for (const char* p = key + prefixLength; *p; ++p) {
+            if (*p < '0' || *p > '9') return false;
+            const unsigned int digit = static_cast<unsigned int>(*p - '0');
+            if (value > 0xFFFFFFFFu / 10u ||
+                (value * 10u) > 0xFFFFFFFFu - digit) {
+                return false;
+            }
+            value = value * 10u + digit;
+        }
+        *result = value;
+        return true;
+    }
+
+    unsigned int NextAppendIndex(INIClass* target)
+    {
+        if (!target) return 0;
+        unsigned int next = 0;
+        bool found = false;
+        for (auto* section = target->Sections.First();
+             section && section->IsValid(); section = section->Next()) {
+            for (auto* node = section->Entries.GenericList::First();
+                 node && node->IsValid(); node = node->Next()) {
+                auto* entry = static_cast<INIClass::INIEntry*>(node);
+                unsigned int value = 0;
+                if (!entry->Key || !ReadAppendIndex(entry->Key, &value)) continue;
+                if (!found || value >= next) {
+                    if (value == 0xFFFFFFFFu) return 0xFFFFFFFFu;
+                    next = value + 1;
+                    found = true;
+                }
+            }
+        }
+        return found ? next : 0;
+    }
+
+    bool WriteAppend(INIClass* target, const char* sectionName, const char* value)
+    {
+        if (!target || !sectionName || !sectionName[0] || !value) return false;
+
+        // The key is only an identity for INIClass; the type-list loader
+        // consumes its value. Keep a private namespace so Ares and Phobos
+        // generated keys are neither scanned nor reused by ra2hook.
+        const unsigned int index = NextAppendIndex(target);
+        if (index == 0xFFFFFFFFu) return false;
+        char key[64] = {};
+        std::snprintf(key, sizeof(key), "%s%u", kOutputAppendKeyPrefix, index);
+        return target->WriteString(sectionName, key, value);
+    }
+
+    char* DuplicateAppendValue(const char* begin, const char* end)
+    {
+        if (!begin || !end || end < begin) return nullptr;
+
+        const char* valueEnd = end;
+        for (const char* p = begin; p < end; ++p) {
+            if (IsIniCommentMarker(p, end)) {
+                valueEnd = p;
+                break;
+            }
+        }
+        return DuplicateTrimmedSpan(begin, valueEnd);
+    }
+
     void ParentDirOf(const char* path, char* out, size_t outSize)
     {
         if (!out || outSize == 0) return;
@@ -205,6 +291,8 @@ namespace {
     struct IncludeContext {
         char stack[kMaxIncludeDepth][kPathMax] = {};
         int depth = 0;
+        int appendId = 0;
+        bool preserveAppendKeys = false;
         MergeStats* stats = nullptr;
         const char* logTag = nullptr;
     };
@@ -362,12 +450,24 @@ namespace {
                             Log::Warn("%s: ignored invalid key %s:%d",
                                       Tag(ctx.logTag), path, lineNumber);
                         } else {
-                            char* value = DuplicateTrimmedSpan(equal + 1, trimmedEnd);
+                            const bool append = IsAppendMarker(key) &&
+                                                 !IsIncludeSection(section);
+                            char* value = append
+                                ? DuplicateAppendValue(equal + 1, trimmedEnd)
+                                : DuplicateTrimmedSpan(equal + 1, trimmedEnd);
                             if (!value) {
                                 RecordError(ctx.stats, "%s:%d out of memory", path, lineNumber);
                                 valid = false;
                             } else {
-                                out.WriteString(section, key, value);
+                                if (append) {
+                                    char syntheticKey[64] = {};
+                                    std::snprintf(syntheticKey, sizeof(syntheticKey),
+                                                  "%s%d", kAppendKeyPrefix,
+                                                  ++ctx.appendId);
+                                    out.WriteString(section, syntheticKey, value);
+                                } else {
+                                    out.WriteString(section, key, value);
+                                }
                                 std::free(value);
                             }
                         }
@@ -463,8 +563,19 @@ namespace {
                  node && node->IsValid(); node = node->Next()) {
                 auto* entry = static_cast<INIClass::INIEntry*>(node);
                 if (!entry->Key || !entry->Key[0]) continue;
-                pTarget->WriteString(section->Name, entry->Key,
-                                     entry->Value ? entry->Value : "");
+                const char* value = entry->Value ? entry->Value : "";
+                if (IsSyntheticAppendKey(entry->Key)) {
+                    if (ctx.stats) ++ctx.stats->appends;
+                    // Keep the marker while building a staging INI. A direct
+                    // MergeFile call targets the live object and can append now.
+                    if (ctx.preserveAppendKeys) {
+                        pTarget->WriteString(section->Name, entry->Key, value);
+                    } else if (!WriteAppend(pTarget, section->Name, value)) {
+                        continue;
+                    }
+                } else {
+                    pTarget->WriteString(section->Name, entry->Key, value);
+                }
                 ++keys;
             }
         }
@@ -579,9 +690,10 @@ int ScanDirectory(const char* dir, const char* wildcard,
 }
 
 int MergeFile(CCINIClass* pTarget, const char* path, MergeStats* stats,
-              const char* logTag)
+              const char* logTag, bool preserveAppendKeys)
 {
     IncludeContext context;
+    context.preserveAppendKeys = preserveAppendKeys;
     context.stats = stats;
     context.logTag = logTag;
     return MergeFileRecursive(pTarget, path, nullptr, context);
@@ -601,13 +713,18 @@ bool MergeDirectory(CCINIClass* pTarget, const char* dir,
         RecordError(stats, "cannot scan overlay directory: %s", dir);
         return false;
     }
+    IncludeContext context;
+    context.preserveAppendKeys = true;
+    context.stats = stats;
+    context.logTag = logTag;
     for (int i = 0; i < count; ++i) {
-        MergeFile(pTarget, files[i], stats, logTag);
+        MergeFileRecursive(pTarget, files[i], nullptr, context);
     }
     return !stats || stats->errors == 0;
 }
 
-void Copy(CCINIClass* pTarget, INIClass* pSource, bool copyIncludeSection)
+void Copy(CCINIClass* pTarget, INIClass* pSource, bool copyIncludeSection,
+          bool applyAppendEntries)
 {
     if (!pTarget || !pSource) return;
     for (auto* section = pSource->Sections.First();
@@ -618,8 +735,12 @@ void Copy(CCINIClass* pTarget, INIClass* pSource, bool copyIncludeSection)
              node && node->IsValid(); node = node->Next()) {
             auto* entry = static_cast<INIClass::INIEntry*>(node);
             if (!entry->Key || !entry->Key[0]) continue;
-            pTarget->WriteString(section->Name, entry->Key,
-                                 entry->Value ? entry->Value : "");
+            const char* value = entry->Value ? entry->Value : "";
+            if (applyAppendEntries && IsSyntheticAppendKey(entry->Key)) {
+                WriteAppend(pTarget, section->Name, value);
+            } else {
+                pTarget->WriteString(section->Name, entry->Key, value);
+            }
         }
     }
 }

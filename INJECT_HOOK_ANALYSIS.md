@@ -216,6 +216,7 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 - 推荐把 `enabled/<target>` 只作为入口目录，真正的可选规则放在 mix 或其他目录中由 `index.ini` 引用；否则同一个文件既会被目录扫描又会被 include，可能被重复写入。
 - include 路径先相对当前散装文件目录解析，再按游戏/MIX 文件系统解析。mix 会在每个目标首次注入前注册，因此较早的 `sound/ai/uimd` 挂点也能引用 mix 内 INI。循环引用和超过 32 层的链会被跳过并写日志。
 - 注入文件支持普通 `section/key=value` 语法。Ares/Phobos 的 `$Inherits` 等扩展语义不会在私有链中自动复制。
+- 普通段中的 Ares 列表追加语法 `+=TypeName` 也会被保留为独立追加项；写入真实引擎对象时转换为 ra2hook 专用的 `RA2Hook_N=TypeName`，不会像普通 `WriteString("+", ...)` 那样只留下最后一项。ra2hook 不扫描、不复用 Ares/Phobos 使用的 `var_N` 键名空间。
 
 ### 9.2 目标和冲突边界
 

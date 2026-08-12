@@ -14,6 +14,7 @@ namespace IniOverlay {
         int files = 0;
         int sections = 0;
         int keys = 0;
+        int appends = 0;
         int errors = 0;
         int warnings = 0;
         char firstError[256] = {};
@@ -30,7 +31,7 @@ namespace IniOverlay {
     // Merges a file and its private [#include] tree. The current file body is
     // merged first, followed by include entries in source order.
     int MergeFile(CCINIClass* pTarget, const char* path, MergeStats* stats,
-                  const char* logTag);
+                  const char* logTag, bool preserveAppendKeys = false);
 
     // An empty directory is a valid empty overlay. Fatal read/parse failures
     // make the return value false; recoverable syntax/include issues are warnings.
@@ -38,6 +39,7 @@ namespace IniOverlay {
                         MergeStats* stats, const char* logTag);
 
     void Copy(CCINIClass* pTarget, INIClass* pSource,
-              bool copyIncludeSection = false);
+              bool copyIncludeSection = false,
+              bool applyAppendEntries = false);
 
 }  // namespace IniOverlay
