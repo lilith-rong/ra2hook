@@ -36,7 +36,7 @@ DEFINE_HOOK(0x668F6A, RA2Hook_DumpEntry, 0x5)
     const auto& cfg = Config::Get();
 
     if (!cfg.dump.enabled) {
-        Log::Info("dump: 已跳过（ra2hook.ini 中 [Dump] Enabled 未开启）");
+        Log::Info("dump: 已跳过（配置中的 [Dump] Enabled 未开启）");
         return 0;
     }
 

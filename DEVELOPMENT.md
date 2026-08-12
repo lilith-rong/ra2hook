@@ -365,7 +365,8 @@ v1 的核心内容是**地址表**:`address: { "YR-1.001-EN-标准": null }` 加
 | `enabled` | **保留**,这是唯一仍有运行时意义的字段 |
 
 ⚠️ **`hooks.json` 仍是早期设计记录，程序不读取它。** 当前所有开关都在
-游戏目录下的 `ra2hook.ini`，避免引入另一套配置解析器。
+`<game>\ra2hook\ra2hook.ini`，避免引入另一套配置解析器。为兼容旧部署，若新位置
+不存在，才回退读取 `<game>\ra2hook.ini`。
 
 ### 5.2 当前配置
 
@@ -387,13 +388,16 @@ DebounceMs=500
 `[Dump]` 的完整字段及注释直接见仓库根目录的 `ra2hook.ini`。运行时行为、文件格式和
 UI 操作见 `RUNTIME_INI.md`。
 
+配置路径基于当前运行的游戏 EXE，而不是进程名或当前工作目录。日志只写入
+`<game>\ra2hook\ra2hook.log`。
+
 加载器规则:
 
 ```
-1. ra2hook.ini 不存在       → 使用安全默认值，dump/inject/runtime 全部关闭
+1. 新旧位置均无 ra2hook.ini → 使用安全默认值，dump/inject/runtime 全部关闭
 2. 对应 section 不存在      → 该子系统使用默认值，不回退读取其他 section
 3. Inject.Enabled == no     → 启动注入 handler 立即返回
-4. Inject.Files 指定文件缺失 → 记录 WARN；自动目录模式按文件名顺序合并现有文件
+4. enabled 目标目录文件缺失 → 记录 WARN；按文件名顺序合并其余现有文件
 5. Runtime.Enabled == no    → IPC 仍可报告状态，但拒绝所有游戏数据写入
 6. runtime 文件语法/include 错误 → 保留上一代有效状态，不做部分应用
 ```
@@ -428,14 +432,14 @@ UI 操作见 `RUNTIME_INI.md`。
 
 **关于 SyringeEx 握手**:上游 yrpp-spawner 实测**没有** `SYRINGE_HANDSHAKE` 导出、也没有 host 声明,仅靠 `DEFINE_HOOK` 写入 `.syhks00` 段即可被 Syringe 加载。故本项目**不需要**手写握手——这纠正了本文早期版本的说法。握手只用于版本门禁（如 Phobos 拒绝旧 Syringe）,基本注入用不上。
 
-**出口条件**:CI 出 `ra2hook.dll`,拷进 RA2 目录后 Syringe 能加载、生成含探针行的 `ra2hook.log`。
+**出口条件**:CI 出 `ra2hook.dll`,拷进 RA2 目录后 Syringe 能加载、生成含探针行的 `ra2hook\ra2hook.log`。
 
 这一步验证的是编译设置、`.syhks00` 段生成、Syringe 识别、DLL 加载这整条链路。**必须独立通过再往下走**,否则后面每个 bug 都要在"逻辑错了"和"链路没通"之间二分查找。
 
 ### 阶段 1:探针
 
 - [x] Logger（文件输出,带级别）— `src/Logger.h`
-- [x] Config 加载 — `src/Config.cpp`（ra2hook.ini,见 §5）
+- [x] Config 加载 — `src/Config.cpp`（`ra2hook\ra2hook.ini`，见 §5）
 - [x] 在 `0x679A15` 挂探针 — 已实测:该点 pINI==INI_Rules,写入 `[E1]Strength=543` 被类型解析采纳（见 `src/Hooks.RulesInject.cpp` 头部注释）
 - [x] IDA 确认并切换到后置候选点 `0x679A1B`（源码已切换，实机待验证）
 

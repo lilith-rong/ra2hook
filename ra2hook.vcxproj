@@ -46,5 +46,6 @@
     <ClInclude Include="$(ThisDir)\src\Runtime.h" />
     <ClInclude Include="$(ThisDir)\src\RuntimeWatcher.h" />
     <ClInclude Include="$(ThisDir)\src\RuntimeProtocol.h" />
+    <ClInclude Include="$(ThisDir)\src\GamePaths.h" />
   </ItemGroup>
 </Project>

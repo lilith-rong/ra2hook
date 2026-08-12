@@ -47,6 +47,10 @@ jobs:
     - name: Publish runtime UI
       run: dotnet publish ui/RA2Hook.RuntimeUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o Release/ra2hook
 
+    - name: Stage ra2hook configuration
+      shell: pwsh
+      run: Copy-Item -LiteralPath ra2hook.ini -Destination Release/ra2hook/ra2hook.ini -Force
+
     - name: Upload artifact
       if: ${{ success() }}
       uses: actions/upload-artifact@v4

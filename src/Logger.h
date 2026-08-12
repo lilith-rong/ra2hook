@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <cstdarg>
 
+#include "GamePaths.h"
+
 namespace Log {
 
     enum class Level { Off = 0, Error, Warn, Info, Debug };
@@ -19,7 +21,10 @@ namespace Log {
     namespace detail {
         // 单一输出点。追加写入，打不开就静默丢弃（不崩游戏）。
         inline void Write(const char* tag, const char* fmt, va_list args) {
-            std::FILE* f = std::fopen("ra2hook.log", "a");
+            GamePaths::EnsureDataDirectory();
+            char path[MAX_PATH] = {};
+            if (!GamePaths::Build(path, sizeof(path), "ra2hook\\ra2hook.log")) return;
+            std::FILE* f = std::fopen(path, "a");
             if (!f) return;
             std::fputs(tag, f);
             std::vfprintf(f, fmt, args);

@@ -86,6 +86,13 @@ Directory=ra2hook\runtime
 DebounceMs=500
 ```
 
+Put this section in `<game>\ra2hook\ra2hook.ini`. The legacy
+`<game>\ra2hook.ini` path is read only when the new path does not exist.
+Relative `Directory` values are resolved against the directory containing the
+running game executable, not against its process name or current working
+directory. Runtime symbols are not required; `ra2hook.pdb` is only useful for
+debugging and may be kept beside `ra2hook.dll`.
+
 `Enabled` is loaded once. Changing it while the game is running requires a game
 restart. The UI can pause/resume `AutoApply` for the current process.
 
@@ -198,5 +205,5 @@ the game root, and the target machine does not need a separately installed
 9. Exit the match and confirm status reports rollback before entering LAN/Internet.
 10. Repeat with only ra2hook, Ares + ra2hook, Phobos + ra2hook, and both extensions.
 
-Keep `ra2hook.log`, DLL versions, executable hashes, the patch files, and the UI
+Keep `ra2hook/ra2hook.log`, DLL versions, executable hashes, the patch files, and the UI
 result table for each test run.

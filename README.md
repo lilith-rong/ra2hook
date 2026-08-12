@@ -4,8 +4,9 @@
 
 **核心目标**：提供一套**独立于 Ares/Phobos `[#include]`** 的 rules 注入机制——在它们的 include 全部处理完之后，再加载用户指定的 ini，且互不干扰。
 
-完整设计见 **[DEVELOPMENT.md](./DEVELOPMENT.md)**。`0x679A1B` 后置注入点的
-IDA 依据与实机测试步骤见 **[INJECT_HOOK_ANALYSIS.md](./INJECT_HOOK_ANALYSIS.md)**。
+完整设计见 **[DEVELOPMENT.md](./DEVELOPMENT.md)**。INI 注入的配置、目录、
+实机结果和排查方法见 **[INJECT_INI.md](./INJECT_INI.md)**；
+底层 IDA 依据与 Hook 分析见 **[INJECT_HOOK_ANALYSIS.md](./INJECT_HOOK_ANALYSIS.md)**。
 单机运行时热重载、回滚和外部 UI 见 **[RUNTIME_INI.md](./RUNTIME_INI.md)**。
 本文件讲怎么构建与运行。
 
@@ -17,12 +18,13 @@ IDA 依据与实机测试步骤见 **[INJECT_HOOK_ANALYSIS.md](./INJECT_HOOK_ANA
 ra2hook/
 ├── DEVELOPMENT.md            # 设计文档（唯一事实来源）
 ├── INJECT_HOOK_ANALYSIS.md   # 后置注入点分析与实机测试说明
+├── INJECT_INI.md             # INI 注入配置、实现边界与实机结果
 ├── RUNTIME_INI.md            # 单机运行时 INI、回滚、UI 与测试说明
 ├── README.md                 # 本文件
 ├── ra2hook.sln               # 解决方案（Debug/DevBuild/Release，均 Win32）
 ├── ra2hook.vcxproj           # 工程
 ├── ra2hook.props             # 编译设置（改写自 yrpp-spawner，已知可用）
-├── ra2hook.ini               # dump / inject / runtime 配置
+├── ra2hook.ini               # 配置模板；CI 打包到 ra2hook/ra2hook.ini
 ├── hooks.json                # v1 设计存档，程序不再读取（见 DEVELOPMENT §5.1）
 ├── .gitmodules               # YRpp submodule
 ├── .github/workflows/build.yml
@@ -50,7 +52,7 @@ ra2hook/
    git commit -am "add YRpp submodule"
    git push
    ```
-2. Actions 自动触发。绿勾后进 workflow 页，下 `ra2hook-<sha>` artifact，里面是 `ra2hook.dll`、PDB 和自包含的 `ra2hook/ra2hook-ui.exe`。将 artifact 解压到游戏目录后，UI 会和 `dump`、`inject`、`runtime` 共用游戏目录下的 `ra2hook/` 文件夹。
+2. Actions 自动触发。绿勾后进 workflow 页，下 `ra2hook-<sha>` artifact，里面是 `ra2hook.dll`、PDB、自包含的 `ra2hook/ra2hook-ui.exe` 和 `ra2hook/ra2hook.ini`。将 artifact 解压到游戏目录后，UI 会和配置、日志、`dump`、`inject`、`runtime` 共用游戏目录下的 `ra2hook/` 文件夹。
 3. CI 已带 `submodules: recursive`，会自动拉 YRpp。
 
 > CI 只编译，**跑不了游戏**。测试要把 artifact 下载到本地 RA2 安装里手动验（下节）。这个"push→等→下载→本地测"的循环是纯 CI 方案的固有代价。
@@ -66,7 +68,11 @@ ra2hook/
 1. 把 `ra2hook.dll` 放进 RA2 目录（与 `gamemd.exe`、Ares/Phobos 同级），并保留 artifact 中的 `ra2hook/ra2hook-ui.exe` 目录结构。UI 会自动把自身所在 `ra2hook/` 的上一级识别为游戏目录。
 2. 用 Syringe 启动游戏（`Syringe.exe "gamemd.exe" -SPAWN ...`，或你现有的启动器）。
    - Syringe 会扫描目录内 DLL 的 `.syhks00` 段，自动应用我们的 hook。**无需 host 声明或握手**。
-3. 进入一场遭遇战，退出后看 RA2 目录下的 `ra2hook.log`。
+3. 进入一场遭遇战，退出后看 `<游戏目录>\ra2hook\ra2hook.log`。
+
+DLL 以当前运行的游戏 EXE 路径确定游戏目录，不依赖进程名或启动器设置的当前工作
+目录。配置优先读取 `<游戏目录>\ra2hook\ra2hook.ini`；旧位置
+`<游戏目录>\ra2hook.ini` 仅作兼容回退。日志始终写入新目录，不写入旧位置。
 
 **当前候选挂点的日志标志**：日志里出现一行
 ```

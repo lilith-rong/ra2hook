@@ -10,6 +10,7 @@
 #include <cstring>   // _stricmp
 
 #include "Config.h"
+#include "GamePaths.h"
 #include "Logger.h"
 
 namespace Config {
@@ -17,7 +18,8 @@ namespace Config {
     static Settings s_settings;
     static bool     s_loaded = false;
 
-    static const char* kFileName = "ra2hook.ini";
+    static const char* kPrimaryFileName = "ra2hook\\ra2hook.ini";
+    static const char* kLegacyFileName = "ra2hook.ini";
 
     // 直接遍历链表的段查找。引擎的 ReadString/GetKeyCount 对**不存在的段**会
     // 回退到上一次成功段（CurrentSection），拿它们做存在性检查恒为真；这里与
@@ -37,16 +39,39 @@ namespace Config {
         if (s_loaded) return;
         s_loaded = true;
 
-        CCFileClass file(kFileName);
-        if (!file.Exists()) {
-            Log::Info("Config: %s 不存在，全部功能保持默认（dump/inject/runtime 关闭）",
-                      kFileName);
+        char primaryPath[MAX_PATH] = {};
+        char legacyPath[MAX_PATH] = {};
+        if (!GamePaths::Build(primaryPath, sizeof(primaryPath), kPrimaryFileName) ||
+            !GamePaths::Build(legacyPath, sizeof(legacyPath), kLegacyFileName)) {
+            Log::Warn("Config: 无法确定游戏 EXE 目录，全部功能保持默认");
+            return;
+        }
+
+        RawFileClass primaryFile(primaryPath);
+        RawFileClass legacyFile(legacyPath);
+        RawFileClass* file = nullptr;
+        const char* selectedPath = nullptr;
+        if (primaryFile.Exists()) {
+            file = &primaryFile;
+            selectedPath = primaryPath;
+        } else if (legacyFile.Exists()) {
+            file = &legacyFile;
+            selectedPath = legacyPath;
+            Log::Warn("Config: 正在使用旧路径 %s；建议移动到 %s",
+                      legacyPath, primaryPath);
+        } else {
+            Log::Info("Config: %s 不存在（也未找到旧路径），全部功能保持默认",
+                      primaryPath);
             return;
         }
 
         // 用引擎的 INI 容器解析我们自己的配置文件
         CCINIClass ini;
-        ini.ReadCCFile(&file);
+        if (!ini.ReadCCFile(file)) {
+            Log::Warn("Config: 读取失败 %s，全部功能保持默认", selectedPath);
+            return;
+        }
+        Log::Info("Config: 已加载 %s", selectedPath);
 
         auto& d = s_settings.dump;
         if (FindSection(&ini, "Dump")) {

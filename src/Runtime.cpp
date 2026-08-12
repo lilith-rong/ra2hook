@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "Config.h"
+#include "GamePaths.h"
 #include "IniOverlay.h"
 #include "Logger.h"
 #include "Runtime.h"
@@ -67,6 +68,7 @@ namespace {
     bool s_lockInitialized = false;
     bool s_initialized = false;
     bool s_wasAllowed = false;
+    char s_runtimeDirectory[IniOverlay::kPathMax] = {};
 
     QueuedCommand s_queue[kQueueCapacity] = {};
     int s_queueHead = 0;
@@ -466,7 +468,7 @@ namespace {
 
         CCINIClass overlay;
         IniOverlay::MergeStats stats;
-        if (!IniOverlay::MergeDirectory(&overlay, Config::Get().runtime.directory,
+        if (!IniOverlay::MergeDirectory(&overlay, s_runtimeDirectory,
                                         &stats, "runtime")) {
             SetMessage("validation failed: %s", stats.firstError);
             Log::Warn("runtime: validation failed: %s", stats.firstError);
@@ -666,22 +668,30 @@ void Initialize()
 
     Config::Load();
     const auto& config = Config::Get().runtime;
-    EnsureDirectoryTree(config.directory);
+    const bool directoryReady = GamePaths::Resolve(
+        s_runtimeDirectory, sizeof(s_runtimeDirectory), config.directory);
+    if (directoryReady) {
+        EnsureDirectoryTree(s_runtimeDirectory);
+    } else {
+        Log::Error("runtime: 无法解析目录 %s", config.directory);
+    }
 
     s_snapshot.initialized = true;
-    s_snapshot.enabled = config.enabled;
+    s_snapshot.enabled = config.enabled && directoryReady;
     s_snapshot.autoApply = config.autoApply;
     std::snprintf(s_snapshot.directory, sizeof(s_snapshot.directory), "%s",
-                  config.directory);
+                  directoryReady ? s_runtimeDirectory : config.directory);
     std::snprintf(s_snapshot.lastMessage, sizeof(s_snapshot.lastMessage), "%s",
+                  !directoryReady ? "runtime directory is invalid" :
                   config.enabled ? "waiting for a single-player game" :
-                                   "runtime disabled in ra2hook.ini");
+                                   "runtime disabled in ra2hook configuration");
 
     RuntimeProtocol::Start();
-    if (config.enabled) RuntimeWatcher::Start(config.directory, config.debounceMs);
+    if (config.enabled && directoryReady)
+        RuntimeWatcher::Start(s_runtimeDirectory, config.debounceMs);
     Log::Info("runtime: initialized enabled=%d auto=%d dir=%s pipe=%s",
-              config.enabled ? 1 : 0, config.autoApply ? 1 : 0,
-              config.directory, kPipeName);
+              s_snapshot.enabled ? 1 : 0, config.autoApply ? 1 : 0,
+              s_snapshot.directory, kPipeName);
 }
 
 bool Queue(Command command, bool argument)

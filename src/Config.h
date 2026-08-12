@@ -1,7 +1,7 @@
 // Config.h — 运行时配置。
 //
-// 读 RA2 根目录下的 ra2hook.ini（不用 JSON：引擎自带 INI 解析器，
-// 而我们处在无异常、静态 CRT 环境，少一个解析器少一堆麻烦）。
+// 优先读 <game>\ra2hook\ra2hook.ini，兼容回退 <game>\ra2hook.ini。
+// 路径基于当前游戏 EXE，而不是可能被启动器改变的工作目录。
 //
 // 配置缺失一律走安全默认值：dump/inject/runtime 全关。理由见 DEVELOPMENT.md §5.2——
 // 任何失败都不得阻止游戏启动。
@@ -59,7 +59,7 @@ namespace Config {
         int            logLevel = 3;   // 对应 Log::Level::Info
     };
 
-    // 载入 ra2hook.ini。多次调用只生效一次。
+    // 载入配置。多次调用只生效一次。
     void Load();
 
     const Settings& Get();

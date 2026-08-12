@@ -71,7 +71,10 @@ public static class IniDocument
 
     public static string ResolveRuntimeDirectory(string gameRoot)
     {
-        var configured = ReadRuntimeDirectory(Path.Combine(gameRoot, "ra2hook.ini"));
+        var primaryConfig = Path.Combine(gameRoot, "ra2hook", "ra2hook.ini");
+        var legacyConfig = Path.Combine(gameRoot, "ra2hook.ini");
+        var configPath = File.Exists(primaryConfig) ? primaryConfig : legacyConfig;
+        var configured = ReadRuntimeDirectory(configPath);
         return Path.GetFullPath(Path.Combine(gameRoot,
             string.IsNullOrWhiteSpace(configured) ? Path.Combine("ra2hook", "runtime") : configured));
     }
