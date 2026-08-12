@@ -49,6 +49,22 @@
 #include <CCFileClass.h>
 #include <MixFileClass.h>
 #include <RulesClass.h>
+#include <AircraftTypeClass.h>
+#include <AnimTypeClass.h>
+#include <BulletTypeClass.h>
+#include <BuildingTypeClass.h>
+#include <HouseTypeClass.h>
+#include <InfantryTypeClass.h>
+#include <OverlayTypeClass.h>
+#include <ParticleSystemTypeClass.h>
+#include <ParticleTypeClass.h>
+#include <SmudgeTypeClass.h>
+#include <SuperWeaponTypeClass.h>
+#include <TerrainTypeClass.h>
+#include <UnitTypeClass.h>
+#include <VoxelAnimTypeClass.h>
+#include <WarheadTypeClass.h>
+#include <WeaponTypeClass.h>
 #include <Memory.h>
 
 #include <windows.h>
@@ -198,6 +214,567 @@ namespace RulesInject {
         return total;
     }
 
+    static unsigned int HashList(CCINIClass* pINI, const char* sectionName)
+    {
+        if (!pINI || !sectionName || !sectionName[0]) return 0;
+
+        auto* section = pINI->GetSection(sectionName);
+        if (!section) return 0;
+
+        // Hash complete entry strings in list order. ReadString would require
+        // a fixed buffer and could miss a change beyond the truncated prefix.
+        unsigned int hash = 2166136261u;
+        int count = 0;
+        const auto append = [&](const char* text) {
+            if (!text) return;
+            for (const unsigned char* p =
+                     reinterpret_cast<const unsigned char*>(text); *p; ++p) {
+                hash ^= static_cast<unsigned int>(*p);
+                hash *= 16777619u;
+            }
+        };
+
+        for (auto* node = section->Entries.GenericList::First();
+             node && node->IsValid(); node = node->Next()) {
+            auto* entry = static_cast<INIClass::INIEntry*>(node);
+            if (!entry->Key) continue;
+            ++count;
+            append(entry->Key);
+            hash ^= 0xFFu;
+            hash *= 16777619u;
+            append(entry->Value);
+            hash ^= 0x00u;
+            hash *= 16777619u;
+        }
+        return hash ^ static_cast<unsigned int>(count);
+    }
+
+    struct RulesListSnapshot {
+        unsigned int countries;
+        unsigned int overlayTypes;
+        unsigned int superWeaponTypes;
+        unsigned int warheads;
+        unsigned int smudgeTypes;
+        unsigned int terrainTypes;
+        unsigned int buildingTypes;
+        unsigned int vehicleTypes;
+        unsigned int aircraftTypes;
+        unsigned int infantryTypes;
+        unsigned int animations;
+        unsigned int voxelAnims;
+        unsigned int particles;
+        unsigned int particleSystems;
+        unsigned int weaponTypes;
+        unsigned int projectiles;
+        unsigned int projectileAlias;
+    };
+
+    static RulesListSnapshot CaptureRulesListSnapshot(CCINIClass* pINI)
+    {
+        return {
+            HashList(pINI, "Countries"),
+            HashList(pINI, "OverlayTypes"),
+            HashList(pINI, "SuperWeaponTypes"),
+            HashList(pINI, "Warheads"),
+            HashList(pINI, "SmudgeTypes"),
+            HashList(pINI, "TerrainTypes"),
+            HashList(pINI, "BuildingTypes"),
+            HashList(pINI, "VehicleTypes"),
+            HashList(pINI, "AircraftTypes"),
+            HashList(pINI, "InfantryTypes"),
+            HashList(pINI, "Animations"),
+            HashList(pINI, "VoxelAnims"),
+            HashList(pINI, "Particles"),
+            HashList(pINI, "ParticleSystems"),
+            HashList(pINI, "WeaponTypes"),
+            HashList(pINI, "Projectiles"),
+            HashList(pINI, "Projectile")
+        };
+    }
+
+    enum class RulesTypeKind {
+        Countries,
+        OverlayTypes,
+        SuperWeaponTypes,
+        Warheads,
+        SmudgeTypes,
+        TerrainTypes,
+        BuildingTypes,
+        VehicleTypes,
+        AircraftTypes,
+        InfantryTypes,
+        Animations,
+        VoxelAnims,
+        Particles,
+        ParticleSystems,
+        WeaponTypes,
+        Projectiles,
+        Count
+    };
+
+    static constexpr int kRulesTypeKindCount =
+        static_cast<int>(RulesTypeKind::Count);
+    static constexpr int kMaxTrackedTypeIds = 1024;
+
+    struct TrackedRuleType {
+        RulesTypeKind kind;
+        char id[64];
+    };
+
+    struct RulesTypeDiagnostics {
+        bool pending;
+        int beforeCounts[kRulesTypeKindCount];
+        bool changed[kRulesTypeKindCount];
+        int candidates[kRulesTypeKindCount];
+        int stored;
+        TrackedRuleType types[kMaxTrackedTypeIds];
+    };
+
+    static RulesTypeDiagnostics s_typeDiagnostics = {};
+
+    static int TypeKindIndex(RulesTypeKind kind)
+    {
+        return static_cast<int>(kind);
+    }
+
+    static const char* TypeKindSection(RulesTypeKind kind)
+    {
+        switch (kind) {
+        case RulesTypeKind::Countries: return "Countries";
+        case RulesTypeKind::OverlayTypes: return "OverlayTypes";
+        case RulesTypeKind::SuperWeaponTypes: return "SuperWeaponTypes";
+        case RulesTypeKind::Warheads: return "Warheads";
+        case RulesTypeKind::SmudgeTypes: return "SmudgeTypes";
+        case RulesTypeKind::TerrainTypes: return "TerrainTypes";
+        case RulesTypeKind::BuildingTypes: return "BuildingTypes";
+        case RulesTypeKind::VehicleTypes: return "VehicleTypes";
+        case RulesTypeKind::AircraftTypes: return "AircraftTypes";
+        case RulesTypeKind::InfantryTypes: return "InfantryTypes";
+        case RulesTypeKind::Animations: return "Animations";
+        case RulesTypeKind::VoxelAnims: return "VoxelAnims";
+        case RulesTypeKind::Particles: return "Particles";
+        case RulesTypeKind::ParticleSystems: return "ParticleSystems";
+        case RulesTypeKind::WeaponTypes: return "WeaponTypes";
+        case RulesTypeKind::Projectiles: return "Projectiles";
+        default: return "unknown";
+        }
+    }
+
+    static int CurrentTypeCount(RulesTypeKind kind)
+    {
+        switch (kind) {
+        case RulesTypeKind::Countries: return HouseTypeClass::Array.Count;
+        case RulesTypeKind::OverlayTypes: return OverlayTypeClass::Array.Count;
+        case RulesTypeKind::SuperWeaponTypes:
+            return SuperWeaponTypeClass::Array.Count;
+        case RulesTypeKind::Warheads: return WarheadTypeClass::Array.Count;
+        case RulesTypeKind::SmudgeTypes: return SmudgeTypeClass::Array.Count;
+        case RulesTypeKind::TerrainTypes: return TerrainTypeClass::Array.Count;
+        case RulesTypeKind::BuildingTypes: return BuildingTypeClass::Array.Count;
+        case RulesTypeKind::VehicleTypes: return UnitTypeClass::Array.Count;
+        case RulesTypeKind::AircraftTypes: return AircraftTypeClass::Array.Count;
+        case RulesTypeKind::InfantryTypes: return InfantryTypeClass::Array.Count;
+        case RulesTypeKind::Animations: return AnimTypeClass::Array.Count;
+        case RulesTypeKind::VoxelAnims: return VoxelAnimTypeClass::Array.Count;
+        case RulesTypeKind::Particles: return ParticleTypeClass::Array.Count;
+        case RulesTypeKind::ParticleSystems:
+            return ParticleSystemTypeClass::Array.Count;
+        case RulesTypeKind::WeaponTypes: return WeaponTypeClass::Array.Count;
+        case RulesTypeKind::Projectiles: return BulletTypeClass::Array.Count;
+        default: return -1;
+        }
+    }
+
+    static bool FindTrackedType(const TrackedRuleType& tracked)
+    {
+        switch (tracked.kind) {
+        case RulesTypeKind::Countries:
+            return HouseTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::OverlayTypes:
+            return OverlayTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::SuperWeaponTypes:
+            return SuperWeaponTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::Warheads:
+            return WarheadTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::SmudgeTypes:
+            return SmudgeTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::TerrainTypes:
+            return TerrainTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::BuildingTypes:
+            return BuildingTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::VehicleTypes:
+            return UnitTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::AircraftTypes:
+            return AircraftTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::InfantryTypes:
+            return InfantryTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::Animations:
+            return AnimTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::VoxelAnims:
+            return VoxelAnimTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::Particles:
+            return ParticleTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::ParticleSystems:
+            return ParticleSystemTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::WeaponTypes:
+            return WeaponTypeClass::Find(tracked.id) != nullptr;
+        case RulesTypeKind::Projectiles:
+            return BulletTypeClass::Find(tracked.id) != nullptr;
+        default:
+            return false;
+        }
+    }
+
+    static void BeginTypeDiagnostics()
+    {
+        s_typeDiagnostics = {};
+        s_typeDiagnostics.pending = true;
+        for (int i = 0; i < kRulesTypeKindCount; ++i) {
+            s_typeDiagnostics.beforeCounts[i] =
+                CurrentTypeCount(static_cast<RulesTypeKind>(i));
+        }
+    }
+
+    template <typename T>
+    static void TrackNewListEntries(CCINIClass* pINI, const char* sectionName,
+                                    RulesTypeKind kind)
+    {
+        if (!pINI || !sectionName) return;
+
+        const int kindIndex = TypeKindIndex(kind);
+        s_typeDiagnostics.changed[kindIndex] = true;
+
+        const int count = pINI->GetKeyCount(sectionName);
+        char id[128] = {};
+        for (int i = 0; i < count; ++i) {
+            const char* key = pINI->GetKeyName(sectionName, i);
+            if (!key || !key[0]) continue;
+
+            id[0] = '\0';
+            if (pINI->ReadString(sectionName, key, "", id, sizeof(id)) <= 0 ||
+                !id[0] || T::Find(id)) {
+                continue;
+            }
+
+            bool duplicate = false;
+            for (int j = 0; j < s_typeDiagnostics.stored; ++j) {
+                const TrackedRuleType& existing = s_typeDiagnostics.types[j];
+                if (existing.kind == kind && !_stricmp(existing.id, id)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+
+            ++s_typeDiagnostics.candidates[kindIndex];
+            if (s_typeDiagnostics.stored >= kMaxTrackedTypeIds) continue;
+
+            TrackedRuleType& tracked =
+                s_typeDiagnostics.types[s_typeDiagnostics.stored++];
+            tracked.kind = kind;
+            std::snprintf(tracked.id, sizeof(tracked.id), "%s", id);
+        }
+    }
+
+    static void ReportTypeDiagnostics()
+    {
+        if (!s_typeDiagnostics.pending) return;
+        s_typeDiagnostics.pending = false;
+
+        int changedSections = 0;
+        int totalCandidates = 0;
+        int totalFound = 0;
+        int totalMissing = 0;
+        int totalUntracked = 0;
+        int successSamples = 0;
+        int failureSamples = 0;
+
+        for (int i = 0; i < kRulesTypeKindCount; ++i) {
+            if (!s_typeDiagnostics.changed[i]) continue;
+            ++changedSections;
+
+            const RulesTypeKind kind = static_cast<RulesTypeKind>(i);
+            int stored = 0;
+            int found = 0;
+            for (int j = 0; j < s_typeDiagnostics.stored; ++j) {
+                const TrackedRuleType& tracked = s_typeDiagnostics.types[j];
+                if (tracked.kind != kind) continue;
+                ++stored;
+                if (FindTrackedType(tracked)) ++found;
+            }
+
+            const int missing = stored - found;
+            const int untracked = s_typeDiagnostics.candidates[i] - stored;
+            totalCandidates += s_typeDiagnostics.candidates[i];
+            totalFound += found;
+            totalMissing += missing;
+            totalUntracked += untracked;
+            Log::Info("inject post @0x668EF5: [%s] array %d->%d, new candidates=%d, verified=%d/%d, missing=%d, untracked=%d",
+                      TypeKindSection(kind),
+                      s_typeDiagnostics.beforeCounts[i], CurrentTypeCount(kind),
+                      s_typeDiagnostics.candidates[i], found, stored, missing,
+                      untracked);
+        }
+
+        for (int i = 0; i < s_typeDiagnostics.stored; ++i) {
+            const TrackedRuleType& tracked = s_typeDiagnostics.types[i];
+            if (FindTrackedType(tracked)) {
+                if (successSamples < 12) {
+                    Log::Info("inject post: registered [%s] %s",
+                              TypeKindSection(tracked.kind), tracked.id);
+                    ++successSamples;
+                }
+            } else if (failureSamples < 12) {
+                Log::Warn("inject post: missing [%s] %s after LoadTypesFromINI",
+                          TypeKindSection(tracked.kind), tracked.id);
+                ++failureSamples;
+            }
+        }
+
+        if (changedSections == 0) {
+            Log::Info("inject post @0x668EF5: LoadTypesFromINI 完成，rules 类型列表无变化");
+            return;
+        }
+
+        Log::Info("inject post @0x668EF5: LoadTypesFromINI 完成，变化列表 %d，新增候选 %d，已跟踪 %d，找到 %d，缺失 %d，未跟踪 %d",
+                  changedSections, totalCandidates, s_typeDiagnostics.stored,
+                  totalFound, totalMissing, totalUntracked);
+        if (totalUntracked > 0) {
+            Log::Warn("inject post @0x668EF5: 新增候选超过 %d 个，仅对已跟踪项核验；不能据此判定全部注册成功",
+                      kMaxTrackedTypeIds);
+        }
+    }
+
+    struct RulesGlobalSnapshot {
+        unsigned int maximums;
+        unsigned int general;
+        unsigned int powerups;
+        unsigned int landCharacteristics;
+        unsigned int iq;
+        unsigned int jumpjetControls;
+        unsigned int multiplayerDialogSettings;
+        unsigned int ai;
+    };
+
+    static RulesGlobalSnapshot CaptureRulesGlobalSnapshot(CCINIClass* pINI)
+    {
+        return {
+            HashList(pINI, "Maximums"),
+            HashList(pINI, "General"),
+            HashList(pINI, "Powerups"),
+            HashList(pINI, "LandCharacteristics"),
+            HashList(pINI, "IQ"),
+            HashList(pINI, "JumpjetControls"),
+            HashList(pINI, "MultiplayerDialogSettings"),
+            HashList(pINI, "AI")
+        };
+    }
+
+    // Init/Read_File consumes these sections before it reaches 0x679A1B. The
+    // overlay therefore needs the corresponding native readers, otherwise the
+    // CCINIClass changes but RulesClass keeps its old cached values. Sections
+    // naturally read after LoadTypesFromINI (difficulty, damage, audiovisual,
+    // crates, radiation, elevation/wall, special weapons and command bar) are
+    // deliberately left to the original flow. Sides, Colors/ColorAdd and other
+    // structural registries are not replayed because they mutate global arrays.
+    static void ReloadInjectedGlobalRules(
+        CCINIClass* pINI, const RulesGlobalSnapshot& before)
+    {
+        RulesClass* rules = RulesClass::Instance;
+        if (!rules || !pINI) {
+            Log::Warn("inject: 无法重读 rules 全局段（RulesClass 或 INI 为空）");
+            return;
+        }
+
+        int changed = 0;
+        int failed = 0;
+        const auto reload = [&](const char* section, unsigned int oldHash,
+                                bool (RulesClass::*reader)(CCINIClass*)) {
+            if (HashList(pINI, section) == oldHash) return;
+            ++changed;
+            if (!(rules->*reader)(pINI)) {
+                ++failed;
+                Log::Warn("inject: 重读 rules 全局段 [%s] 失败", section);
+            } else {
+                Log::Info("inject: 重读 rules 全局段 [%s]", section);
+            }
+        };
+
+        reload("Maximums", before.maximums, &RulesClass::Read_Maximums);
+        reload("JumpjetControls", before.jumpjetControls,
+               &RulesClass::Read_JumpjetControls);
+        reload("MultiplayerDialogSettings", before.multiplayerDialogSettings,
+               &RulesClass::Read_MultiplayerDialogSettings);
+        reload("AI", before.ai, &RulesClass::Read_AI);
+        reload("Powerups", before.powerups, &RulesClass::Read_Powerups);
+        reload("LandCharacteristics", before.landCharacteristics,
+               &RulesClass::Read_LandCharacteristics);
+        reload("IQ", before.iq, &RulesClass::Read_IQ);
+        reload("General", before.general, &RulesClass::Read_General);
+
+        Log::Info("inject: rules 全局段重读完成（变化 %d，失败 %d）",
+                  changed, failed);
+    }
+
+    // RulesClass has no Read_WeaponTypes/Read_Projectiles helpers. Those two
+    // lists are consumed by WeaponTypeClass/BulletTypeClass references while
+    // LoadTypesFromINI is running, so create their entries explicitly before
+    // the original virtual LoadFromINI loops start.
+    template <typename T>
+    static int RegisterFindOrAllocateList(CCINIClass* pINI,
+                                           const char* sectionName,
+                                           unsigned int beforeHash)
+    {
+        if (!pINI || !sectionName || !sectionName[0]) return 0;
+        if (HashList(pINI, sectionName) == beforeHash) return 0;
+
+        const int count = pINI->GetKeyCount(sectionName);
+        int created = 0;
+        int missing = 0;
+        char id[128] = {};
+        for (int i = 0; i < count; ++i) {
+            const char* key = pINI->GetKeyName(sectionName, i);
+            if (!key || !key[0]) continue;
+
+            id[0] = '\0';
+            if (pINI->ReadString(sectionName, key, "", id, sizeof(id)) <= 0 ||
+                !id[0]) {
+                continue;
+            }
+
+            T* before = T::Find(id);
+            T* value = T::FindOrAllocate(id);
+            if (!value) {
+                ++missing;
+            } else if (!before) {
+                ++created;
+            }
+        }
+
+        if (count > 0) {
+            Log::Info("inject: [%s] scanned %d key(s), allocated %d new type(s)%s",
+                      sectionName, count, created,
+                      missing > 0 ? ", some entries failed" : "");
+        }
+        return created;
+    }
+
+    // Read_File registers the names in these list sections before it calls
+    // LoadTypesFromINI. The post-Ares hook runs after that step, so a private
+    // overlay can contain the new definition but the engine still cannot find
+    // the new type. Re-run only the list registration readers here; the normal
+    // LoadTypesFromINI flow below then loads the definitions and fields.
+    static void RegisterInjectedTypes(CCINIClass* pINI,
+                                      const RulesListSnapshot& before)
+    {
+        RulesClass* rules = RulesClass::Instance;
+        if (!rules || !pINI) {
+            Log::Warn("inject: 无法补注册 rules 类型（RulesClass 或 INI 为空）");
+            return;
+        }
+
+        int registeredLists = 0;
+        const auto changed = [&](const char* name, unsigned int oldHash) {
+            return HashList(pINI, name) != oldHash;
+        };
+
+        if (changed("Countries", before.countries)) {
+            TrackNewListEntries<HouseTypeClass>(
+                pINI, "Countries", RulesTypeKind::Countries);
+            registeredLists += rules->Read_Countries(pINI) ? 1 : 0;
+        }
+        if (changed("OverlayTypes", before.overlayTypes)) {
+            TrackNewListEntries<OverlayTypeClass>(
+                pINI, "OverlayTypes", RulesTypeKind::OverlayTypes);
+            registeredLists += rules->Read_OverlayTypes(pINI) ? 1 : 0;
+        }
+        if (changed("SuperWeaponTypes", before.superWeaponTypes)) {
+            TrackNewListEntries<SuperWeaponTypeClass>(
+                pINI, "SuperWeaponTypes", RulesTypeKind::SuperWeaponTypes);
+            registeredLists += rules->Read_SuperWeaponTypes(pINI) ? 1 : 0;
+        }
+        if (changed("Warheads", before.warheads)) {
+            TrackNewListEntries<WarheadTypeClass>(
+                pINI, "Warheads", RulesTypeKind::Warheads);
+            registeredLists += rules->Read_Warheads(pINI) ? 1 : 0;
+        }
+        if (changed("SmudgeTypes", before.smudgeTypes)) {
+            TrackNewListEntries<SmudgeTypeClass>(
+                pINI, "SmudgeTypes", RulesTypeKind::SmudgeTypes);
+            registeredLists += rules->Read_SmudgeTypes(pINI) ? 1 : 0;
+        }
+        if (changed("TerrainTypes", before.terrainTypes)) {
+            TrackNewListEntries<TerrainTypeClass>(
+                pINI, "TerrainTypes", RulesTypeKind::TerrainTypes);
+            registeredLists += rules->Read_TerrainTypes(pINI) ? 1 : 0;
+        }
+        if (changed("BuildingTypes", before.buildingTypes)) {
+            TrackNewListEntries<BuildingTypeClass>(
+                pINI, "BuildingTypes", RulesTypeKind::BuildingTypes);
+            registeredLists += rules->Read_BuildingTypes(pINI) ? 1 : 0;
+        }
+        if (changed("VehicleTypes", before.vehicleTypes)) {
+            TrackNewListEntries<UnitTypeClass>(
+                pINI, "VehicleTypes", RulesTypeKind::VehicleTypes);
+            registeredLists += rules->Read_VehicleTypes(pINI) ? 1 : 0;
+        }
+        if (changed("AircraftTypes", before.aircraftTypes)) {
+            TrackNewListEntries<AircraftTypeClass>(
+                pINI, "AircraftTypes", RulesTypeKind::AircraftTypes);
+            registeredLists += rules->Read_AircraftTypes(pINI) ? 1 : 0;
+        }
+        if (changed("InfantryTypes", before.infantryTypes)) {
+            TrackNewListEntries<InfantryTypeClass>(
+                pINI, "InfantryTypes", RulesTypeKind::InfantryTypes);
+            registeredLists += rules->Read_InfantryTypes(pINI) ? 1 : 0;
+        }
+        if (changed("Animations", before.animations)) {
+            TrackNewListEntries<AnimTypeClass>(
+                pINI, "Animations", RulesTypeKind::Animations);
+            registeredLists += rules->Read_Animations(pINI) ? 1 : 0;
+        }
+        if (changed("VoxelAnims", before.voxelAnims)) {
+            TrackNewListEntries<VoxelAnimTypeClass>(
+                pINI, "VoxelAnims", RulesTypeKind::VoxelAnims);
+            registeredLists += rules->Read_VoxelAnims(pINI) ? 1 : 0;
+        }
+        if (changed("Particles", before.particles)) {
+            TrackNewListEntries<ParticleTypeClass>(
+                pINI, "Particles", RulesTypeKind::Particles);
+            registeredLists += rules->Read_Particles(pINI) ? 1 : 0;
+        }
+        if (changed("ParticleSystems", before.particleSystems)) {
+            TrackNewListEntries<ParticleSystemTypeClass>(
+                pINI, "ParticleSystems", RulesTypeKind::ParticleSystems);
+            registeredLists += rules->Read_ParticleSystems(pINI) ? 1 : 0;
+        }
+
+        if (changed("WeaponTypes", before.weaponTypes)) {
+            TrackNewListEntries<WeaponTypeClass>(
+                pINI, "WeaponTypes", RulesTypeKind::WeaponTypes);
+        }
+        if (changed("Projectiles", before.projectiles)) {
+            TrackNewListEntries<BulletTypeClass>(
+                pINI, "Projectiles", RulesTypeKind::Projectiles);
+        }
+        // Some community INIs use singular [Projectile] as an append-list
+        // alias. Keep the section intact, but register its IDs as BulletTypes.
+        if (changed("Projectile", before.projectileAlias)) {
+            TrackNewListEntries<BulletTypeClass>(
+                pINI, "Projectile", RulesTypeKind::Projectiles);
+        }
+
+        const int weaponTypes = RegisterFindOrAllocateList<WeaponTypeClass>(
+            pINI, "WeaponTypes", before.weaponTypes);
+        int projectileTypes = RegisterFindOrAllocateList<BulletTypeClass>(
+            pINI, "Projectiles", before.projectiles);
+        projectileTypes += RegisterFindOrAllocateList<BulletTypeClass>(
+            pINI, "Projectile", before.projectileAlias);
+
+        Log::Info("inject: 已补注册 %d 个 rules 类型列表，额外分配 WeaponTypes=%d Projectiles=%d，等待 LoadTypesFromINI 加载定义",
+                  registeredLists, weaponTypes, projectileTypes);
+    }
+
     // 把 ra2hook/inject/mix/ 下全部 .mix 注册进引擎文件系统。
     // ai/uimd/sound 的挂点可能早于 rules 主挂点，因此不能只在主钩子注册。
     static void InjectMix()
@@ -267,9 +844,18 @@ namespace RulesInject {
             InjectMix();
 
         int total = 0;
+        const RulesGlobalSnapshot beforeGlobals =
+            CaptureRulesGlobalSnapshot(pINI);
+        const RulesListSnapshot beforeLists = CaptureRulesListSnapshot(pINI);
+        BeginTypeDiagnostics();
         // 前 kReadyAtMain 项 = rules/ra2md/art（0x679A1B 时已就绪）。
         for (int i = 0; i < kReadyAtMain; ++i)
             total += InjectTarget(kTargets[i]);
+
+        RegisterInjectedTypes(pINI, beforeLists);
+        // Match the native Read_File dependency order: list registries exist
+        // before global sections that may resolve references to those types.
+        ReloadInjectedGlobalRules(pINI, beforeGlobals);
         Log::Info("inject: 目标目录注入完成（rules/ra2md/art），共 %d 键", total);
     }
 
@@ -381,6 +967,15 @@ DEFINE_HOOK(0x679A1B, RA2Hook_RulesInject_PostAresPhobos, 0x5)
 {
     GET(CCINIClass*, pINI, ESI);
     RulesInject::Apply(pINI);
+    return 0;
+}
+
+// RulesClass::Read_File 在 0x668EF0 调用 LoadTypesFromINI。0x668EF5 是返回后
+// 的第一条完整指令（push "Easy"），ESI 仍为 rules CCINIClass*。当前实机的
+// Ares/Phobos .syhks00 表均未占用 0x668EF5，也未在 0x668ED0..0x668F20 起钩。
+DEFINE_HOOK(0x668EF5, RA2Hook_RulesInject_PostLoadTypesDiagnostic, 0x5)
+{
+    RulesInject::ReportTypeDiagnostics();
     return 0;
 }
 

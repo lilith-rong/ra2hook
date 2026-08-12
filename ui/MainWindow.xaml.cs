@@ -57,15 +57,9 @@ public partial class MainWindow : Window
 
     private string DiscoverGameRoot()
     {
-        var candidates = new[]
-        {
-            AppContext.BaseDirectory,
-            Directory.GetCurrentDirectory(),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."))
-        };
-        return candidates.FirstOrDefault(path => File.Exists(Path.Combine(path, "ra2hook.ini")) ||
-                                                  File.Exists(Path.Combine(path, "gamemd.exe"))) ??
-               AppContext.BaseDirectory;
+        // The published executable lives in <game>\ra2hook alongside dump,
+        // inject, and runtime. Its parent is therefore always the game root.
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
     }
 
     private void ConfigureRoot()

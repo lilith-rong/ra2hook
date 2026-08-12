@@ -41,8 +41,7 @@ namespace {
         RouteCommandBar = 1u << 12,
         RouteMultiplayerDialog = 1u << 13,
         RouteDifficulties = 1u << 14,
-        RouteDifficulty = 1u << 15,
-        RouteAI = 1u << 16
+        RouteAI = 1u << 15
     };
 
     struct QueuedCommand {
@@ -212,7 +211,8 @@ namespace {
             "Maximums", "InfantryTypes", "VehicleTypes", "AircraftTypes",
             "BuildingTypes", "TerrainTypes", "SmudgeTypes", "OverlayTypes",
             "Animations", "VoxelAnims", "Warheads", "Particles",
-            "ParticleSystems", "SuperWeaponTypes", "Countries", "Sides",
+            "ParticleSystems", "WeaponTypes", "Projectiles", "Projectile",
+            "SuperWeaponTypes", "Countries", "Sides",
             "AITriggerTypes", "TeamTypes", "TaskForces", "ScriptTypes",
             "TriggerTypes", "Tags", "Colors", "ColorAdd"
         };
@@ -240,7 +240,6 @@ namespace {
         if (Equals(section, "MultiplayerDialogSettings")) return RouteMultiplayerDialog;
         if (Equals(section, "Easy") || Equals(section, "Normal") ||
             Equals(section, "Difficult")) return RouteDifficulties;
-        if (Equals(section, "Difficulty")) return RouteDifficulty;
         if (Equals(section, "AI")) return RouteAI;
         return RouteNone;
     }
@@ -384,7 +383,6 @@ namespace {
         if (routes & RouteMultiplayerDialog)
             ok = rules->Read_MultiplayerDialogSettings(ini) && ok;
         if (routes & RouteDifficulties) ok = rules->Read_Difficulties(ini) && ok;
-        if (routes & RouteDifficulty) ok = rules->Read_Difficulty(ini) && ok;
         if (routes & RouteAI) ok = rules->Read_AI(ini) && ok;
         return ok;
     }

@@ -9,6 +9,12 @@
 - [x] inject 文件内独立展开 `[#include]`：可用 `enabled/<target>/index.ini`
       控制加载散装或 mix 内的规则 ini，不写入/干扰 Ares/Phobos 原 include 链。
 - [x] 私有 include 解析已绕过 `CCINIClass::ReadCCFile`，避免 Ares 自动展开造成重复或顺序不确定。
+- [x] rules 私有覆盖在 `0x679A1B` 合并后，仅对变化的原生类型列表补跑注册；
+      `WeaponTypes`/`Projectiles` 逐项 `FindOrAllocate`；现有规则中的单数
+      `[Projectile]` 也作为兼容别名处理，随后由原流程
+      `LoadTypesFromINI` 加载定义。
+- [x] `0x668EF5` 在 `LoadTypesFromINI` 返回后核验新增 ID 是否进入类型数组；与
+      项目自身 `0x668F6A` dump hook 无重叠，目标 Ares/Phobos hook 表也未覆盖。
 - [x] **art 注入挂点** — `INI_Art`（&CCINIClass::INI_Art，0x887180）：IDA 定位
       ARTMD.INI 在 `sub_52CD70` 内 0x52d053 读进 INI_Art，早于含注入点的
       `sub_668BF0`（0x52d317 调用）；art 读取循环（0x679a66）在注入点后，
@@ -32,6 +38,8 @@
 - [ ] sound 专项实测：空目录、`[Defaults]` 覆盖、新 `[SoundList]` 条目、多个入口
       INI、重复 `+=` include、MIX 内 INI，以及 Ares + Phobos 下连续多次启动。
 - [ ] 实测：Ares/Phobos 共存时确认 `0x679A1B` 能到达，且私有 include 只展开一次。
+- [ ] 实测：确认 `0x668EF5` 汇总为 `missing=0, untracked=0`，并实际生产新增
+      Infantry/Vehicle/Building；新增 Weapon/Projectile 还必须完成一次真实开火。
 
 ## dump
 

@@ -9,11 +9,11 @@
 - 当前源码已切换到 **`0x679A1B`，补丁长度 `0x5`**；这是静态分析通过、实机待验证的候选点。
 - IDA 静态分析确认 `0x679A1B` 位于 Ares/Phobos 使用的 `0x679A15` 之后。
 - 到达 `0x679A1B` 时，`ESI` 已由原程序设置为 `CCINIClass*`，可以直接作为 rules 注入目标。
-- `0x679A1B` 仍在第一段 TypeClass 读取之前，写入 INI 的值应能被后续类型解析采纳。
+- `0x679A1B` 仍在第一段 TypeClass 读取之前；当前 handler 会在合并私有 INI 后补跑原生类型列表注册，再让后续 TypeClass 解析采纳新增定义和值覆盖。
 - 该方案避免 ra2hook 与 Ares/Phobos 在 `0x679A15` 上依赖同址 hook 的执行顺序。
 - inject 文件现在通过 `CCFileClass` 读取原始字节并由 ra2hook 自己解析，不再调用
   可能被 Ares hook 的 `CCINIClass::ReadCCFile`；私有 `[#include]` 只展开一次。
-- **`0x679A1B` 目前只是经过 IDA 确认的候选点，源码已切换，但尚未实机验证。**
+- **当前游戏目录中的 DLL 尚未包含本轮补注册修复，必须用新的 GitHub Actions artifact 复测。**
 
 已有实测事实仍然有效：旧点 `0x679A15` 收到的 `pINI` 是 `INI_Rules`，且写入 `[E1]Strength=543` 后，类型解析结果确实变为 543。这证明该控制流区域处于 INI 装载完成之后、类型消费之前。新点只比它后移 6 字节。
 
@@ -174,7 +174,26 @@ pINI->ReadString("RA2HookOrderProbe", "Stage", "", stage, sizeof(stage));
 probe @0x679A1B before inject: Stage=[AresInclude]
 ```
 
-随后应看到 rules 目录扫描、`index.ini` 的 `[#include]` 展开以及键合并完成的日志。游戏内最终值应是 543，说明 ra2hook 的覆盖发生在 Ares include 之后、类型解析之前。
+随后应看到 rules 目录扫描、`index.ini` 的 `[#include]` 展开以及键合并完成的日志。新的 DLL 还必须出现类似：
+
+```text
+inject: 已补注册 ... 个 rules 类型列表，额外分配 WeaponTypes=... Projectiles=...
+inject post @0x668EF5: [InfantryTypes] array ...->..., new candidates=..., verified=.../..., missing=0, untracked=0
+inject post @0x668EF5: LoadTypesFromINI 完成，变化列表 ...，新增候选 ...，已跟踪 ...，找到 ...，缺失 0，未跟踪 0
+```
+
+游戏内最终值应是 543，说明 ra2hook 的覆盖发生在 Ares include 之后、类型解析之前。
+
+若测试文件把新 ID 放入 `[InfantryTypes]`、`[VehicleTypes]`、`[BuildingTypes]`、
+`[Warheads]`、`[WeaponTypes]` 或 `[Projectiles]`，应同时确认对应的新增类型进入了
+引擎数组。仅在 dump 中看到 `[SUYURIX]` 定义段或 `RA2Hook_N=SUYURIX`，只能证明
+INI 合并成功，不能证明类型已经注册。
+
+`0x668EF5` 是 `RulesClass::Read_File` 在 `0x668EF0` 调用
+`LoadTypesFromINI` 后的返回地址。原始字节是单条完整的五字节
+`push offset "Easy"`，不使用栈参数；诊断 handler 只读取类型数组并返回正常流程。
+目标游戏目录中的 Ares/Phobos `.syhks00` 表没有覆盖该点，也没有在
+`0x668ED0..0x668F20` 起 hook。这里避开了 Phobos 已使用的 `0x679CAF`。
 
 ## 7. 共存测试矩阵
 
@@ -202,8 +221,9 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 | 启动即崩溃 | `0x679A1B` 是否为当前 exe 的指令边界；hook 长度是否为 `0x5`；是否误用栈参数 |
 | 没有 `0x679A1B` 日志 | DLL 是否加载；exe 散列是否一致；上游 hook 是否跳过正常续行 |
 | `pINI` 无效或段数异常 | `ESI` 是否被正确读取；Syringe 是否在 handler 前保存了该点寄存器状态 |
-| 探针读不到 `AresInclude` | 测试 INI 是否真的位于 Ares 原 include 链；Ares 是否完成加载；候选点时序假设不成立 |
-| 探针正确但最终仍是 321 | ra2hook 文件未扫描/未展开，或 543 在更晚阶段被其他逻辑覆盖 |
+| 探针读不到 `AresInclude` | 先确认测试键确实放进 Ares 原 include 链；未配置探针时空值不能单独否定时序；已配置仍为空才继续排查 Ares 时序 |
+| dump 有定义但单位不存在 | 检查 `0x668EF5` 汇总；`missing>0` 表示注册失败，只有 `missing=0, untracked=0` 才完成全量核验，再查 `Owner/RequiredHouses/ForbiddenHouses/Prerequisite/TechLevel` 等生产条件 |
+| 探针正确但最终仍是 321 | 先检查“已补注册”和 `0x668EF5` 日志；再检查列表键是否在对应列表段；最后排查后续 lang/map 规则是否再次覆盖 |
 | 最终值为 543，但 Ares/Phobos 功能异常 | 检查 inject 是否覆盖了扩展自身使用的键；缩小测试 INI，只保留探针键 |
 | include 被执行两次 | 当前源码已绕过 `CCINIClass::ReadCCFile`，若仍重复，检查同一个文件是否既被目录扫描又被 `index.ini` 引用 |
 
@@ -216,14 +236,27 @@ probe @0x679A1B before inject: Stage=[AresInclude]
 - 推荐把 `enabled/<target>` 只作为入口目录，真正的可选规则放在 mix 或其他目录中由 `index.ini` 引用；否则同一个文件既会被目录扫描又会被 include，可能被重复写入。
 - include 路径先相对当前散装文件目录解析，再按游戏/MIX 文件系统解析。mix 会在每个目标首次注入前注册，因此较早的 `sound/ai/uimd` 挂点也能引用 mix 内 INI。循环引用和超过 32 层的链会被跳过并写日志。
 - 注入文件支持普通 `section/key=value` 语法。Ares/Phobos 的 `$Inherits` 等扩展语义不会在私有链中自动复制。
-- 普通段中的 Ares 列表追加语法 `+=TypeName` 也会被保留为独立追加项；写入真实引擎对象时转换为 ra2hook 专用的 `RA2Hook_N=TypeName`，不会像普通 `WriteString("+", ...)` 那样只留下最后一项。ra2hook 不扫描、不复用 Ares/Phobos 使用的 `var_N` 键名空间。
+- 普通段中的 Ares 列表追加语法 `+=TypeName` 也会被保留为独立追加项；写入真实引擎对象时转换为 ra2hook 专用的 `RA2Hook_N=TypeName`，不会像普通 `WriteString("+", ...)` 那样只留下最后一项。ra2hook 不扫描、不复用 Ares/Phobos 使用的 `var_N` 键名空间。由于列表注册早于 `0x679A1B`，handler 合并后会按原版顺序补跑发生变化的原生列表注册；`WeaponTypes` 与 `Projectiles` 没有 `RulesClass::Read_*` 包装函数，则逐项调用原生 `FindOrAllocate`。现有实机 dump 还发现 2 个社区规则把弹体追加到单数 `[Projectile]`，因此该段也作为兼容别名参与 BulletType 补注册，但不会被改名或写回 `[Projectiles]`。这解决“定义段存在但新增类型未注册”的问题，同时避免仅修改普通字段时重复重跑全部列表。
+- `RulesClass::Init/Read_File` 在 `0x679A1B` 前已经缓存的全局段中，发生变化时会主动重读：`Maximums`、`JumpjetControls`、`MultiplayerDialogSettings`、`AI`、`Powerups`、`LandCharacteristics`、`IQ`、`General`。类型列表先注册，再按原版依赖顺序重读这些段。
+- `Easy/Normal/Difficult`、`CrateRules`、`CombatDamage`、`Radiation`、`ElevationModel`、`WallModel`、`AudioVisual`、`SpecialWeapons` 和 `AdvancedCommandBar` 本来就在 `LoadTypesFromINI` 后由原流程读取，不提前重复调用。`Sides`、`Colors/ColorAdd` 等会修改全局结构的段也不在此重放。
+
+对当前游戏目录的 Ares/Phobos `.syhks00` 再检查后，14 个类型列表读取器
+内部没有扩展 hook；补注册不会重复执行 Ares/Phobos 的类型扩展逻辑。
+`Read_General` 内有 Ares 的字段读取 hook，`Read_AI` 内有 Ares `Buf_AI`，
+`Read_JumpjetControls` 内有 Phobos `RulesClass_ReadJumpjetControls_Extra`。
+主动重读这些发生变化的全局段时，相应扩展字段也会再次读取并覆盖到最终值；
+这是让私有 INI 中扩展全局键生效所需的行为，但仍应纳入 Ares/Phobos 实机回归。
+
+当前实机 dump 的 382 个 `+=` 条目统计为：标准类型列表 380 项，单数
+`[Projectile]` 2 项（`SuStealthGeneratorP`、`ALLInvisibleHigh`）。后两项会走
+兼容别名注册路径；日志中的 `[Projectiles]` 候选数会包含两种段名。
 
 ### 9.2 目标和冲突边界
 
 本次对实际游戏目录中的 `Ares.dll`、`Phobos.dll` 和旧版 `ra2hook.dll` 做了地址区间检查：
 `Ares.dll` 与 `Phobos.dll` 共同占用 `0x679A15..0x679A1A`（6 字节），也共同占用
 `0x5FACDF..0x5FACE3`（5 字节）；没有发现它们占用 `0x679A1B`、`0x52D37D`、
-`0x53531A`、`0x52C6C4`、`0x7510F6` 或 `0x668F6A`。Ares、Phobos、IHCore 的
+`0x53531A`、`0x52C6C4`、`0x7510F6`、`0x668EF5` 或 `0x668F6A`。Ares、Phobos、IHCore 的
 Syringe hook 元数据也没有覆盖新的两个 sound 点。这只能说明没有直接字节区间重叠，
 不能单独证明 SyringeIH 重放指令后的寄存器和控制流安全。
 
@@ -278,7 +311,11 @@ Phobos Build #47+6_0 下依次否决了三个点，均会触发 `C0000005`，即
 4. 注入结果被 TypeClass 实际采纳，而不只是存在于 `CCINIClass`；
 5. Ares/Phobos 原 include 和主要功能未受影响；
 6. 散装 INI 与 mix 内 INI 两种来源都通过；
-7. 完成测试后再把 `0x679A1B` 从“静态分析通过、实机待验证”改为“实机已验证”。
+7. 完成测试后再把本节的“待复测”状态改为“实机已验证”。
+
+第 4 项至少要求 `0x668EF5` 汇总中的 `missing=0` 且 `untracked=0`，并在游戏中实际创建或生产一个
+新增 Infantry/Vehicle/Building。若规则还新增 Weapon/Projectile，应让该单位实际开火，
+不能只用 dump、侧边栏是否显示或数组注册日志代替功能验收。
 
 sound 还需单独确认：日志先出现 `inject prepare @0x52C6C4`，再出现
 `inject apply @0x7510F6`；连续启动无新异常；测试声音能播放；`[Defaults]` 覆盖和

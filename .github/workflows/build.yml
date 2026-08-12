@@ -45,7 +45,7 @@ jobs:
       shell: cmd
 
     - name: Publish runtime UI
-      run: dotnet publish ui/RA2Hook.RuntimeUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o Release/ui
+      run: dotnet publish ui/RA2Hook.RuntimeUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o Release/ra2hook
 
     - name: Upload artifact
       if: ${{ success() }}
@@ -55,5 +55,5 @@ jobs:
         path: |
           ${{ env.BUILD_CONFIGURATION }}/ra2hook.dll
           ${{ env.BUILD_CONFIGURATION }}/ra2hook.pdb
-          ${{ env.BUILD_CONFIGURATION }}/ui/**
+          ${{ env.BUILD_CONFIGURATION }}/ra2hook/**
         if-no-files-found: error

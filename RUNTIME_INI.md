@@ -109,6 +109,7 @@ it to an engine INI, so a failed include tree cannot leave a half-merged file.
 The current restart-required guard covers:
 
 - type/list registration sections (`VehicleTypes`, `BuildingTypes`, `Warheads`,
+  `WeaponTypes`, `Projectiles`, and the community compatibility alias `Projectile`,
   `Countries`, `Sides`, trigger/team/script/task-force registries, and similar);
 - resource/layout keys such as `Image`, `Voxel`, `SHP`, `VXL`, `HVA`, `Palette`,
   `Foundation`, and `Locomotor`;
@@ -120,6 +121,13 @@ The current restart-required guard covers:
 Known native type sections are loaded through their virtual `LoadFromINI`.
 Ares/Phobos keys inside those sections may be observed by extension hooks, but
 that behavior is experimental; the UI labels this path as best-effort.
+
+`[Easy]`, `[Normal]`, and `[Difficult]` share the native
+`RulesClass::Read_Difficulties` route. A section literally named `[Difficulty]`
+is not routed: IDA shows `0x66D270` expects the INI object in `ECX`, a destination
+`DifficultyStruct*` in `EDX`, and the section name on the stack, so the YRpp
+`Read_Difficulty(CCINIClass*)` declaration is not a safe callable wrapper here.
+Such entries are rejected as unsupported instead of risking memory corruption.
 
 ## 6. Baseline and rollback
 
@@ -169,12 +177,16 @@ The external UI is `ui/RA2Hook.RuntimeUI.csproj` (`net8.0-windows`). It provides
 - auto-apply pause/resume, manual apply, and rollback;
 - old/new values, safety class, result, and result filtering.
 
-The Action publishes a self-contained `Release/ui/ra2hook-ui.exe`, so the target
-machine does not need a separately installed .NET runtime.
+The Action publishes a self-contained `Release/ra2hook/ra2hook-ui.exe`. Keep it
+under `<game>/ra2hook/`, alongside the `dump`, `inject`, and `runtime`
+directories. The UI automatically uses its executable directory's parent as
+the game root, and the target machine does not need a separately installed
+.NET runtime.
 
 ## 9. Real-machine test order
 
-1. Build the Action artifact and place `ra2hook.dll` beside `gamemd.exe`.
+1. Build the Action artifact and extract it into the game directory. Keep
+   `ra2hook.dll` beside `gamemd.exe` and `ra2hook-ui.exe` under `ra2hook/`.
 2. Set `[Runtime] Enabled=yes`; create `ra2hook/runtime/10-test.ini`.
 3. Start Campaign or Skirmish and open `ra2hook-ui.exe`.
 4. Test a weapon scalar, for example an existing weapon's `Damage` or `ROF`.
