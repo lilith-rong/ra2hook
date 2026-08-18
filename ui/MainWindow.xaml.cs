@@ -535,7 +535,7 @@ public partial class MainWindow : Window
                     ? "（没有匹配的 Art 段）"
                     : string.Join(", ", preview.ArtSections.Select(name => $"[{name}]"))) +
                 $"\r\n\r\n素材文件\r\n{preview.MaterialFiles} 个";
-            ExtractUnitButton.IsEnabled = unit.HasRules && preview.MaterialFiles > 0;
+            ExtractUnitButton.IsEnabled = unit.HasRules;
             _lastUnitOutput = Directory.Exists(preview.OutputDirectory)
                 ? preview.OutputDirectory
                 : null;
@@ -582,7 +582,7 @@ public partial class MainWindow : Window
         finally
         {
             ExtractUnitButton.IsEnabled = DumpUnitsList.SelectedItem is DumpUnitInfo selected &&
-                                          selected.HasRules && selected.MaterialFiles > 0;
+                                          selected.HasRules;
         }
     }
 

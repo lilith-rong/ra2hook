@@ -113,8 +113,7 @@ public sealed class DumpUnitExtractor
     {
         EnsureLoaded();
         var output = OutputDirectory(unit);
-        if (!Directory.Exists(output))
-            throw new DirectoryNotFoundException($"没有找到该单位的模型目录: {output}");
+        Directory.CreateDirectory(output);
 
         var rulesPath = Path.Combine(output, "rules.ini");
         var artPath = Path.Combine(output, "art.ini");
