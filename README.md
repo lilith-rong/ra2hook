@@ -111,17 +111,27 @@ Dump 可以导出：
 系统、粒子、动画、残骸和生成/部署单位等已存在的段，并把对应注册表项写入 `rules.ini`。
 单位主 Art 段、重定向 Art 段及关联动画段写入 `art.ini`。原始 Dump 不会被修改。
 
-输出目录为：
+`rules.ini` 和 `art.ini` 会直接写入该单位已有的模型目录，不另外创建单位包目录：
 
 ```text
-<game>\ra2hook\dump\units\<building|infantry|vehicle|aircraft>\<注册名称>\
+<game>\ra2hook\dump\vxl\<注册名称>\   # Voxel 单位
+<game>\ra2hook\dump\shp\<注册名称>\   # SHP 单位
 |-- rules.ini
 |-- art.ini
-`-- VXL/SHP/PCX 等已 Dump 的素材
+`-- 原有 VXL/HVA/SHP/PCX 等素材
 ```
 
-VXL 主体和 SHP 附属动画如果原本分布在两个 Dump 目录，提取时会合并到同一个单位包。
-`rules.ini` 使用 `+=注册名称` 形式补充类型列表，便于作为独立覆盖文件继续使用。
+Voxel 单位优先选择 `vxl/<ID>`，SHP 单位优先选择 `shp/<ID>`；首选目录不存在时会使用
+另一种已存在的素材目录。没有对应模型目录时不会创建空目录。
+
+`rules.ini` 中的类型注册项使用 `单位名称_类别_序号=实际ID`，例如：
+
+```ini
+[VehicleTypes]
+HTNK_Vehicle_1=HTNK
+```
+
+武器、抛射体、弹头、粒子系统等依赖注册也使用同一命名规则。
 
 导出的 INI 默认移除历史 `[#include]` 段，避免将快照重新交给 Ares 时再次展开。
 

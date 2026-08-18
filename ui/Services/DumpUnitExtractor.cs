@@ -113,31 +113,22 @@ public sealed class DumpUnitExtractor
     {
         EnsureLoaded();
         var output = OutputDirectory(unit);
-        if (Directory.Exists(output) && Directory.EnumerateFileSystemEntries(output).Any() && !overwrite)
-            throw new IOException($"目标目录已有内容: {output}");
+        if (!Directory.Exists(output))
+            throw new DirectoryNotFoundException($"没有找到该单位的模型目录: {output}");
 
-        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-        var staging = output + ".tmp." + Guid.NewGuid().ToString("N");
-        try
-        {
-            Directory.CreateDirectory(staging);
-            var copied = CopyMaterials(unit.Id, staging);
-            var rulesSections = CollectRulesSections(unit.Id);
-            var artSections = CollectArtSections(unit.Id, rulesSections);
+        var rulesPath = Path.Combine(output, "rules.ini");
+        var artPath = Path.Combine(output, "art.ini");
+        if (!overwrite && (File.Exists(rulesPath) || File.Exists(artPath)))
+            throw new IOException($"模型目录中已有 rules.ini 或 art.ini: {output}");
 
-            var rulesText = RenderRules(unit, rulesSections);
-            var artText = RenderIni("RA2Hook unit art extract", unit.Id, artSections);
-            await WriteAtomicAsync(Path.Combine(staging, "rules.ini"), rulesText, _rules!.Encoding);
-            await WriteAtomicAsync(Path.Combine(staging, "art.ini"), artText, _art!.Encoding);
+        var rulesSections = CollectRulesSections(unit.Id);
+        var artSections = CollectArtSections(unit.Id, rulesSections);
+        var rulesText = RenderRules(unit, rulesSections);
+        var artText = RenderIni("RA2Hook unit art extract", unit.Id, artSections);
+        await WriteAtomicAsync(rulesPath, rulesText, _rules!.Encoding);
+        await WriteAtomicAsync(artPath, artText, _art!.Encoding);
 
-            if (Directory.Exists(output)) Directory.Delete(output, true);
-            Directory.Move(staging, output);
-            return new DumpExtractionResult(output, rulesSections.Count, artSections.Count, copied);
-        }
-        finally
-        {
-            if (Directory.Exists(staging)) Directory.Delete(staging, true);
-        }
+        return new DumpExtractionResult(output, rulesSections.Count, artSections.Count, CountMaterialFiles(unit.Id));
     }
 
     private List<IniSection> CollectRulesSections(string unitId)
@@ -247,19 +238,51 @@ public sealed class DumpUnitExtractor
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var registryName in DependencyRegistries)
         {
-            var entries = included
-                .Where(id => _registrations.TryGetValue(id, out var registrations) &&
-                             registrations.Any(item => item.Section.Equals(
-                                 registryName, StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            var registry = _rules!.Find(registryName);
+            if (registry is null) continue;
+            var entries = registry.Entries
+                .Select(entry => entry.Value.Trim())
+                .Where(id => id.Length > 0 && included.Contains(id))
                 .ToArray();
             if (entries.Length == 0) continue;
             builder.Append('[').Append(registryName).AppendLine("]");
-            foreach (var id in entries) builder.Append("+=").AppendLine(id);
+            var sequence = 1;
+            foreach (var id in entries)
+            {
+                var left = $"{SafeRegistrationPart(id)}_{RegistrationCategory(registryName)}_{sequence++}";
+                builder.Append(left).Append('=').AppendLine(id);
+            }
             builder.AppendLine();
         }
         AppendSections(builder, sections);
         return builder.ToString();
+    }
+
+    private static string RegistrationCategory(string registryName) => registryName switch
+    {
+        "BuildingTypes" => "Building",
+        "InfantryTypes" => "Infantry",
+        "VehicleTypes" => "Vehicle",
+        "AircraftTypes" => "Aircraft",
+        "WeaponTypes" => "Weapon",
+        "Projectiles" or "Projectile" => "Projectile",
+        "Warheads" => "Warhead",
+        "ParticleSystems" => "ParticleSystem",
+        "Particles" => "Particle",
+        "Animations" => "Animation",
+        "VoxelAnims" => "VoxelAnim",
+        "TerrainTypes" => "Terrain",
+        "SmudgeTypes" => "Smudge",
+        "OverlayTypes" => "Overlay",
+        "SuperWeaponTypes" => "SuperWeapon",
+        _ => registryName
+    };
+
+    private static string SafeRegistrationPart(string value)
+    {
+        var result = new string(value.Select(character =>
+            char.IsLetterOrDigit(character) || character == '_' ? character : '_').ToArray());
+        return string.IsNullOrWhiteSpace(result) ? "Unit" : result;
     }
 
     private void IndexRegistrations()
@@ -302,25 +325,6 @@ public sealed class DumpUnitExtractor
         }
     }
 
-    private int CopyMaterials(string unitId, string output)
-    {
-        var copied = 0;
-        foreach (var kind in new[] { "vxl", "shp" })
-        {
-            var source = FindUnitMaterialDirectory(kind, unitId);
-            if (source is null) continue;
-            foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-            {
-                var relative = Path.GetRelativePath(source, file);
-                var target = Path.Combine(output, relative);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(file, target, true);
-                copied++;
-            }
-        }
-        return copied;
-    }
-
     private int CountMaterialFiles(string unitId)
     {
         var count = 0;
@@ -341,8 +345,27 @@ public sealed class DumpUnitExtractor
             .FirstOrDefault(path => Path.GetFileName(path).Equals(unitId, StringComparison.OrdinalIgnoreCase));
     }
 
-    private string OutputDirectory(DumpUnitInfo unit) =>
-        Path.Combine(_dumpRoot, "units", unit.CategoryKey, SafeFileName(unit.Id));
+    private string OutputDirectory(DumpUnitInfo unit)
+    {
+        var preferredKind = IsVoxel(unit) ? "vxl" : "shp";
+        var preferred = FindUnitMaterialDirectory(preferredKind, unit.Id);
+        if (preferred is not null) return preferred;
+        var fallbackKind = preferredKind.Equals("vxl", StringComparison.OrdinalIgnoreCase) ? "shp" : "vxl";
+        return FindUnitMaterialDirectory(fallbackKind, unit.Id) ??
+               Path.Combine(_dumpRoot, preferredKind, SafeFileName(unit.Id));
+    }
+
+    private bool IsVoxel(DumpUnitInfo unit)
+    {
+        var art = _art!.Find(unit.ArtSection);
+        var redirected = art?.Value("Image");
+        if (!string.IsNullOrWhiteSpace(redirected) && _art.Find(redirected) is { } redirectedArt)
+            art = redirectedArt;
+        var value = art?.Value("Voxel");
+        return value is not null && (value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                                     value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                                     value == "1");
+    }
 
     private static string SafeFileName(string value)
     {

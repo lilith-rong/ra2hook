@@ -319,7 +319,7 @@
                   <ColumnDefinition Width="*" />
                   <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <CheckBox x:Name="OverwriteUnitCheck" Content="覆盖已有单位包"
+                <CheckBox x:Name="OverwriteUnitCheck" Content="覆盖已有 INI"
                           IsChecked="True" VerticalAlignment="Center" />
                 <Button x:Name="ExtractUnitButton" Grid.Column="1" Content="提取单位"
                         Click="ExtractUnit" IsEnabled="False" MinWidth="110" Margin="8,0,0,0" />
