@@ -15,6 +15,8 @@ public partial class MainWindow : Window
     private readonly PipeClient _pipe = new();
     private readonly ObservableCollection<RuntimePatchFile> _files = new();
     private readonly ObservableCollection<RuntimeItem> _items = new();
+    private readonly ObservableCollection<DumpUnitInfo> _dumpUnits = new();
+    private readonly DumpUnitExtractor _dumpExtractor = new();
     private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private FileSystemWatcher? _watcher;
     private string _gameRoot = string.Empty;
@@ -27,17 +29,21 @@ public partial class MainWindow : Window
     private int _lastGeneration = -1;
     private string _lastMessage = string.Empty;
     private bool _polling;
+    private bool _loadingDump;
+    private string? _lastUnitOutput;
 
     public MainWindow()
     {
         InitializeComponent();
         FilesList.ItemsSource = _files;
         RuntimeGrid.ItemsSource = _items;
+        DumpUnitsList.ItemsSource = _dumpUnits;
         _pollTimer.Tick += async (_, _) => await PollAsync();
         Loaded += async (_, _) =>
         {
             GameRootText.Text = DiscoverGameRoot();
             ConfigureRoot();
+            await RefreshDumpCatalogAsync();
             await PollAsync();
             _pollTimer.Start();
         };
@@ -438,7 +444,7 @@ public partial class MainWindow : Window
         view.Refresh();
     }
 
-    private void BrowseRoot(object sender, RoutedEventArgs args)
+    private async void BrowseRoot(object sender, RoutedEventArgs args)
     {
         if (_editorDirty && MessageBox.Show("当前补丁尚未保存，确定切换游戏目录？",
                 "RA2Hook Runtime", MessageBoxButton.OKCancel,
@@ -449,5 +455,147 @@ public partial class MainWindow : Window
         _selectedPath = null;
         GameRootText.Text = dialog.FolderName;
         ConfigureRoot();
+        await RefreshDumpCatalogAsync();
+    }
+
+    private async void RefreshDumpClicked(object sender, RoutedEventArgs args) =>
+        await RefreshDumpCatalogAsync();
+
+    private async Task RefreshDumpCatalogAsync()
+    {
+        if (_loadingDump || string.IsNullOrWhiteSpace(_gameRoot)) return;
+        _loadingDump = true;
+        ExtractUnitButton.IsEnabled = false;
+        OpenUnitOutputButton.IsEnabled = false;
+        DumpSourceText.Text = "正在读取 Dump...";
+        try
+        {
+            var units = await _dumpExtractor.LoadAsync(_gameRoot);
+            _dumpUnits.Clear();
+            foreach (var unit in units) _dumpUnits.Add(unit);
+            DumpSourceText.Text = _dumpExtractor.DumpRoot;
+            ApplyUnitFilter();
+            DumpUnitsList.SelectedItem = CollectionViewSource.GetDefaultView(_dumpUnits)
+                .Cast<DumpUnitInfo>().FirstOrDefault();
+            StatusText.Text = $"Dump 扫描完成，共 {units.Count} 个已注册单位";
+        }
+        catch (Exception exception)
+        {
+            _dumpUnits.Clear();
+            DumpSourceText.Text = exception is FileNotFoundException fileNotFound
+                ? fileNotFound.FileName ?? "Dump INI 不完整"
+                : "Dump 读取失败";
+            UnitCountText.Text = "0";
+            ClearUnitPreview(exception.Message);
+            StatusText.Text = exception.Message;
+        }
+        finally
+        {
+            _loadingDump = false;
+        }
+    }
+
+    private void UnitFilterChanged(object sender, RoutedEventArgs args) => ApplyUnitFilter();
+
+    private void ApplyUnitFilter()
+    {
+        if (DumpUnitsList is null || UnitCategoryFilter is null || UnitSearchText is null) return;
+        var category = (UnitCategoryFilter.SelectedItem as System.Windows.Controls.ComboBoxItem)?
+            .Tag?.ToString() ?? string.Empty;
+        var search = UnitSearchText.Text.Trim();
+        var view = CollectionViewSource.GetDefaultView(_dumpUnits);
+        view.Filter = value => value is DumpUnitInfo unit &&
+            (category.Length == 0 || unit.CategoryKey.Equals(category,
+                StringComparison.OrdinalIgnoreCase)) &&
+            (search.Length == 0 || unit.Id.Contains(search, StringComparison.OrdinalIgnoreCase));
+        view.Refresh();
+        UnitCountText.Text = view.Cast<object>().Count().ToString();
+    }
+
+    private void DumpUnitSelected(object sender, System.Windows.Controls.SelectionChangedEventArgs args)
+    {
+        if (DumpUnitsList.SelectedItem is not DumpUnitInfo unit)
+        {
+            ClearUnitPreview("请选择一个已注册单位");
+            return;
+        }
+
+        try
+        {
+            var preview = _dumpExtractor.Preview(unit);
+            SelectedUnitText.Text = $"{unit.Id}  ·  {unit.Category}";
+            UnitRegistryText.Text = $"[{unit.RegistrySection}]  {unit.RegistrationKey}={unit.Id}";
+            UnitRulesCountText.Text = $"{preview.RulesSections.Count} 个关联段";
+            UnitArtCountText.Text = $"{preview.ArtSections.Count} 个段  /  {preview.MaterialFiles} 个文件";
+            UnitOutputPathText.Text = preview.OutputDirectory;
+            UnitPreviewText.Text =
+                "rules.ini\r\n" + string.Join(", ", preview.RulesSections.Select(name => $"[{name}]")) +
+                "\r\n\r\nart.ini\r\n" +
+                (preview.ArtSections.Count == 0
+                    ? "（没有匹配的 Art 段）"
+                    : string.Join(", ", preview.ArtSections.Select(name => $"[{name}]"))) +
+                $"\r\n\r\n素材文件\r\n{preview.MaterialFiles} 个";
+            ExtractUnitButton.IsEnabled = unit.HasRules;
+            _lastUnitOutput = Directory.Exists(preview.OutputDirectory)
+                ? preview.OutputDirectory
+                : null;
+            OpenUnitOutputButton.IsEnabled = _lastUnitOutput is not null;
+        }
+        catch (Exception exception)
+        {
+            ClearUnitPreview(exception.Message);
+            StatusText.Text = exception.Message;
+        }
+    }
+
+    private void ClearUnitPreview(string message)
+    {
+        SelectedUnitText.Text = "未选择单位";
+        UnitRegistryText.Text = string.Empty;
+        UnitRulesCountText.Text = string.Empty;
+        UnitArtCountText.Text = string.Empty;
+        UnitOutputPathText.Text = string.Empty;
+        UnitPreviewText.Text = message;
+        ExtractUnitButton.IsEnabled = false;
+        OpenUnitOutputButton.IsEnabled = false;
+        _lastUnitOutput = null;
+    }
+
+    private async void ExtractUnit(object sender, RoutedEventArgs args)
+    {
+        if (DumpUnitsList.SelectedItem is not DumpUnitInfo unit) return;
+        ExtractUnitButton.IsEnabled = false;
+        try
+        {
+            var result = await _dumpExtractor.ExtractAsync(
+                unit, OverwriteUnitCheck.IsChecked == true);
+            _lastUnitOutput = result.OutputDirectory;
+            UnitOutputPathText.Text = result.OutputDirectory;
+            OpenUnitOutputButton.IsEnabled = true;
+            StatusText.Text =
+                $"已提取 {unit.Id}: rules {result.RulesSections} 段，art {result.ArtSections} 段，素材 {result.MaterialFiles} 个";
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"提取失败: {exception.Message}";
+        }
+        finally
+        {
+            ExtractUnitButton.IsEnabled = DumpUnitsList.SelectedItem is DumpUnitInfo selected &&
+                                          selected.HasRules;
+        }
+    }
+
+    private void OpenUnitOutput(object sender, RoutedEventArgs args)
+    {
+        if (_lastUnitOutput is null || !Directory.Exists(_lastUnitOutput)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(_lastUnitOutput) { UseShellExecute = true });
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"打开目录失败: {exception.Message}";
+        }
     }
 }

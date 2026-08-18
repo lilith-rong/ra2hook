@@ -101,6 +101,28 @@ Dump 可以导出：
 - VXL、HVA 和 SHP 资源；
 - 按单位归类或按 `OnlyUnits` 精确筛选的资源。
 
+### 单位提取
+
+游戏结束后可以直接在 `ra2hook-ui.exe` 的“单位提取”页面处理已有 Dump，不需要重新
+启动游戏。页面从 `dump/ini/rulesmd.ini` 和 `dump/ini/artmd.ini` 读取四类注册表：
+`BuildingTypes`、`InfantryTypes`、`VehicleTypes`、`AircraftTypes`。
+
+选择注册名称后，提取器会递归收集该单位及其规则依赖，包括武器、抛射体、弹头、粒子
+系统、粒子、动画、残骸和生成/部署单位等已存在的段，并把对应注册表项写入 `rules.ini`。
+单位主 Art 段、重定向 Art 段及关联动画段写入 `art.ini`。原始 Dump 不会被修改。
+
+输出目录为：
+
+```text
+<game>\ra2hook\dump\units\<building|infantry|vehicle|aircraft>\<注册名称>\
+|-- rules.ini
+|-- art.ini
+`-- VXL/SHP/PCX 等已 Dump 的素材
+```
+
+VXL 主体和 SHP 附属动画如果原本分布在两个 Dump 目录，提取时会合并到同一个单位包。
+`rules.ini` 使用 `+=注册名称` 形式补充类型列表，便于作为独立覆盖文件继续使用。
+
 导出的 INI 默认移除历史 `[#include]` 段，避免将快照重新交给 Ares 时再次展开。
 
 ## 安装目录

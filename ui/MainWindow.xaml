@@ -1,8 +1,8 @@
 <Window x:Class="RA2Hook.RuntimeUI.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="RA2Hook Runtime" Width="920" Height="560"
-        MinWidth="760" MinHeight="500" WindowStartupLocation="CenterScreen"
+        Title="RA2Hook 工具" Width="1040" Height="680"
+        MinWidth="820" MinHeight="560" WindowStartupLocation="CenterScreen"
         Background="#FFFFFF">
   <DockPanel>
     <Border DockPanel.Dock="Top" BorderBrush="#D6DAE1" BorderThickness="0,0,0,1"
@@ -14,7 +14,7 @@
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal">
-          <TextBlock Text="RA2Hook Runtime" FontSize="20" FontWeight="SemiBold"
+          <TextBlock Text="RA2Hook 工具" FontSize="20" FontWeight="SemiBold"
                      Foreground="#172033" VerticalAlignment="Center" />
           <TextBlock x:Name="ConnectionText" Text="未连接" Margin="16,2,0,0"
                      Foreground="#6B7280" VerticalAlignment="Center" />
@@ -42,27 +42,6 @@
       </Grid>
     </Border>
 
-    <Border DockPanel.Dock="Top" Background="#FFFFFF" Padding="12,8"
-            BorderBrush="#D6DAE1" BorderThickness="0,0,0,1">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
-        <StackPanel Orientation="Horizontal">
-          <Button Content="新建补丁" Click="NewPatch" />
-          <Button Content="保存" Click="SavePatch" />
-          <Button Content="刷新文件" Click="RefreshFiles" />
-          <Button x:Name="ApplyButton" Content="应用" Click="ApplyPatch" />
-          <Button x:Name="RollbackButton" Content="回滚" Click="RollbackPatch" />
-          <Button Content="删除" Click="DeletePatch" />
-        </StackPanel>
-        <TextBlock x:Name="RuntimePathText" Grid.Column="1" Margin="14,0,0,0"
-                   Foreground="#6B7280" VerticalAlignment="Center"
-                   TextTrimming="CharacterEllipsis" />
-      </Grid>
-    </Border>
-
     <StatusBar DockPanel.Dock="Bottom" Background="#F7F8FA" BorderBrush="#D6DAE1"
                BorderThickness="0,1,0,0">
       <StatusBarItem>
@@ -74,114 +53,281 @@
       </StatusBarItem>
     </StatusBar>
 
-    <Grid Margin="12">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="200" MinWidth="160" />
-        <ColumnDefinition Width="8" />
-        <ColumnDefinition Width="*" />
-      </Grid.ColumnDefinitions>
-      <Grid.RowDefinitions>
-        <RowDefinition Height="*" />
-        <RowDefinition Height="8" />
-        <RowDefinition Height="150" MinHeight="100" />
-      </Grid.RowDefinitions>
-
-      <Border Grid.Column="0" Grid.Row="0" BorderBrush="#D6DAE1" BorderThickness="1"
-              Background="#FFFFFF">
+    <TabControl x:Name="WorkspaceTabs" BorderThickness="0" Background="#FFFFFF">
+      <TabItem Header="运行时补丁">
         <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Text="运行时补丁" FontWeight="SemiBold"
-                     Padding="10,9" Background="#F7F8FA" />
-          <ListBox x:Name="FilesList" SelectionChanged="PatchSelected"
-                   BorderThickness="0" Padding="4">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <Grid MinHeight="28">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                  </Grid.ColumnDefinitions>
-                  <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
-                            Tag="{Binding}" Click="PatchEnabledChanged"
-                            ToolTip="启用或停用此补丁" VerticalAlignment="Center"
-                            Margin="3,0,7,0" />
-                  <TextBlock Grid.Column="1" Text="{Binding DisplayName}"
-                             TextTrimming="CharacterEllipsis"
-                             VerticalAlignment="Center" />
-                </Grid>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </DockPanel>
-      </Border>
-
-      <GridSplitter Grid.Column="1" Grid.Row="0" Width="8" HorizontalAlignment="Stretch"
-                    Background="Transparent" ShowsPreview="True" />
-
-      <TabControl Grid.Column="2" Grid.Row="0" x:Name="MainTabs">
-        <TabItem Header="编辑器">
-          <Grid>
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto" />
-              <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-            <Grid Margin="10,5">
+          <Border DockPanel.Dock="Top" Background="#FFFFFF" Padding="12,8"
+                  BorderBrush="#D6DAE1" BorderThickness="0,0,0,1">
+            <Grid>
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="180" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
               </Grid.ColumnDefinitions>
-              <TextBlock x:Name="SelectedFileText" Foreground="#6B7280"
-                         Text="未选择文件" TextTrimming="CharacterEllipsis"
-                         VerticalAlignment="Center" Margin="0,0,10,0" />
-              <TextBox x:Name="PatchNameText" Grid.Column="1" MinHeight="27"
-                       VerticalContentAlignment="Center" IsEnabled="False" />
-              <Button x:Name="RenameButton" Grid.Column="2" Content="重命名"
-                      Click="RenamePatch" IsEnabled="False" Margin="8,0,0,0" />
+              <StackPanel Orientation="Horizontal">
+                <Button Content="新建补丁" Click="NewPatch" />
+                <Button Content="保存" Click="SavePatch" />
+                <Button Content="刷新文件" Click="RefreshFiles" />
+                <Button x:Name="ApplyButton" Content="应用" Click="ApplyPatch" />
+                <Button x:Name="RollbackButton" Content="回滚" Click="RollbackPatch" />
+                <Button Content="删除" Click="DeletePatch" />
+              </StackPanel>
+              <TextBlock x:Name="RuntimePathText" Grid.Column="1" Margin="14,0,0,0"
+                         Foreground="#6B7280" VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis" />
             </Grid>
-            <TextBox x:Name="EditorText" Grid.Row="1" AcceptsReturn="True"
-                     AcceptsTab="True" VerticalScrollBarVisibility="Auto"
-                     HorizontalScrollBarVisibility="Auto" TextChanged="EditorChanged"
-                     FontFamily="Consolas" FontSize="13" Padding="10"
-                     BorderBrush="#D6DAE1" />
-          </Grid>
-        </TabItem>
-        <TabItem Header="运行结果">
-          <Grid>
+          </Border>
+
+          <Grid Margin="12">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="210" MinWidth="170" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-              <RowDefinition Height="Auto" />
               <RowDefinition Height="*" />
+              <RowDefinition Height="8" />
+              <RowDefinition Height="150" MinHeight="100" />
             </Grid.RowDefinitions>
-            <TextBox x:Name="ResultFilterText" Margin="8" MinHeight="30"
-                     TextChanged="ResultFilterChanged" />
-            <DataGrid x:Name="RuntimeGrid" Grid.Row="1" AutoGenerateColumns="False"
-                      IsReadOnly="True" CanUserAddRows="False" HeadersVisibility="Column"
-                      GridLinesVisibility="Horizontal" BorderThickness="0" RowHeaderWidth="0">
-              <DataGrid.Columns>
-                <DataGridTextColumn Header="段" Binding="{Binding Section}" Width="110" />
-                <DataGridTextColumn Header="键" Binding="{Binding Key}" Width="120" />
-                <DataGridTextColumn Header="旧值" Binding="{Binding OldValue}" Width="*" />
-                <DataGridTextColumn Header="新值" Binding="{Binding NewValue}" Width="*" />
-                <DataGridTextColumn Header="安全等级" Binding="{Binding Safety}" Width="120" />
-                <DataGridTextColumn Header="结果" Binding="{Binding Result}" Width="160" />
-              </DataGrid.Columns>
-            </DataGrid>
+
+            <Border Grid.Column="0" Grid.Row="0" BorderBrush="#D6DAE1" BorderThickness="1"
+                    Background="#FFFFFF">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="运行时补丁" FontWeight="SemiBold"
+                           Padding="10,9" Background="#F7F8FA" />
+                <ListBox x:Name="FilesList" SelectionChanged="PatchSelected"
+                         BorderThickness="0" Padding="4">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <Grid MinHeight="28">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" />
+                          <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                  Tag="{Binding}" Click="PatchEnabledChanged"
+                                  ToolTip="启用或停用此补丁" VerticalAlignment="Center"
+                                  Margin="3,0,7,0" />
+                        <TextBlock Grid.Column="1" Text="{Binding DisplayName}"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Grid.Row="0" Width="8" HorizontalAlignment="Stretch"
+                          Background="Transparent" ShowsPreview="True" />
+
+            <TabControl Grid.Column="2" Grid.Row="0" x:Name="MainTabs">
+              <TabItem Header="编辑器">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                  </Grid.RowDefinitions>
+                  <Grid Margin="10,5">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="180" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="SelectedFileText" Foreground="#6B7280"
+                               Text="未选择文件" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <TextBox x:Name="PatchNameText" Grid.Column="1" MinHeight="27"
+                             VerticalContentAlignment="Center" IsEnabled="False" />
+                    <Button x:Name="RenameButton" Grid.Column="2" Content="重命名"
+                            Click="RenamePatch" IsEnabled="False" Margin="8,0,0,0" />
+                  </Grid>
+                  <TextBox x:Name="EditorText" Grid.Row="1" AcceptsReturn="True"
+                           AcceptsTab="True" VerticalScrollBarVisibility="Auto"
+                           HorizontalScrollBarVisibility="Auto" TextChanged="EditorChanged"
+                           FontFamily="Consolas" FontSize="13" Padding="10"
+                           BorderBrush="#D6DAE1" />
+                </Grid>
+              </TabItem>
+              <TabItem Header="运行结果">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                  </Grid.RowDefinitions>
+                  <TextBox x:Name="ResultFilterText" Margin="8" MinHeight="30"
+                           TextChanged="ResultFilterChanged" />
+                  <DataGrid x:Name="RuntimeGrid" Grid.Row="1" AutoGenerateColumns="False"
+                            IsReadOnly="True" CanUserAddRows="False" HeadersVisibility="Column"
+                            GridLinesVisibility="Horizontal" BorderThickness="0" RowHeaderWidth="0">
+                    <DataGrid.Columns>
+                      <DataGridTextColumn Header="段" Binding="{Binding Section}" Width="110" />
+                      <DataGridTextColumn Header="键" Binding="{Binding Key}" Width="120" />
+                      <DataGridTextColumn Header="旧值" Binding="{Binding OldValue}" Width="*" />
+                      <DataGridTextColumn Header="新值" Binding="{Binding NewValue}" Width="*" />
+                      <DataGridTextColumn Header="安全等级" Binding="{Binding Safety}" Width="120" />
+                      <DataGridTextColumn Header="结果" Binding="{Binding Result}" Width="160" />
+                    </DataGrid.Columns>
+                  </DataGrid>
+                </Grid>
+              </TabItem>
+            </TabControl>
+
+            <GridSplitter Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" Height="8"
+                          HorizontalAlignment="Stretch" Background="Transparent" ShowsPreview="True" />
+
+            <Border Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="2" BorderBrush="#D6DAE1"
+                    BorderThickness="1" Background="#FFFFFF">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="日志" FontWeight="SemiBold"
+                           Padding="10,7" Background="#F7F8FA" />
+                <TextBox x:Name="LogText" IsReadOnly="True" BorderThickness="0" Padding="10"
+                         FontFamily="Consolas" VerticalScrollBarVisibility="Auto"
+                         TextWrapping="Wrap" />
+              </DockPanel>
+            </Border>
           </Grid>
-        </TabItem>
-      </TabControl>
-
-      <GridSplitter Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" Height="8"
-                    HorizontalAlignment="Stretch" Background="Transparent" ShowsPreview="True" />
-
-      <Border Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="2" BorderBrush="#D6DAE1"
-              BorderThickness="1" Background="#FFFFFF">
-        <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Text="日志" FontWeight="SemiBold"
-                     Padding="10,7" Background="#F7F8FA" />
-          <TextBox x:Name="LogText" IsReadOnly="True" BorderThickness="0" Padding="10"
-                   FontFamily="Consolas" VerticalScrollBarVisibility="Auto"
-                   TextWrapping="Wrap" />
         </DockPanel>
-      </Border>
-    </Grid>
+      </TabItem>
+
+      <TabItem Header="单位提取">
+        <Grid Margin="14">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="10" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="150" />
+              <ColumnDefinition Width="260" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <ComboBox x:Name="UnitCategoryFilter" SelectedIndex="0"
+                      SelectionChanged="UnitFilterChanged" MinHeight="30">
+              <ComboBoxItem Content="全部类型" Tag="" />
+              <ComboBoxItem Content="建筑" Tag="building" />
+              <ComboBoxItem Content="步兵" Tag="infantry" />
+              <ComboBoxItem Content="坦克" Tag="vehicle" />
+              <ComboBoxItem Content="飞机" Tag="aircraft" />
+            </ComboBox>
+            <TextBox x:Name="UnitSearchText" Grid.Column="1" Margin="8,0,0,0"
+                     MinHeight="30" VerticalContentAlignment="Center"
+                     TextChanged="UnitFilterChanged" />
+            <Button Grid.Column="2" Content="扫描 Dump" Click="RefreshDumpClicked"
+                    Margin="8,0,0,0" />
+            <TextBlock x:Name="DumpSourceText" Grid.Column="3" Margin="12,0,0,0"
+                       Foreground="#6B7280" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+          </Grid>
+
+          <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="300" MinWidth="230" />
+              <ColumnDefinition Width="10" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border BorderBrush="#D6DAE1" BorderThickness="1" Background="#FFFFFF">
+              <DockPanel>
+                <Grid DockPanel.Dock="Top" Background="#F7F8FA" Height="38">
+                  <TextBlock Text="已注册单位" FontWeight="SemiBold" Margin="10,0,0,0"
+                             VerticalAlignment="Center" />
+                  <TextBlock x:Name="UnitCountText" HorizontalAlignment="Right" Margin="0,0,10,0"
+                             Foreground="#6B7280" VerticalAlignment="Center" />
+                </Grid>
+                <ListBox x:Name="DumpUnitsList" BorderThickness="0" Padding="4"
+                         SelectionChanged="DumpUnitSelected">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <Grid Margin="5,4" MinHeight="38">
+                        <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Row="1" Text="{Binding Availability}" Margin="0,3,0,0"
+                                   Foreground="#6B7280" FontSize="11"
+                                   TextTrimming="CharacterEllipsis" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="10" HorizontalAlignment="Stretch"
+                          Background="Transparent" ShowsPreview="True" />
+
+            <Grid Grid.Column="2">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                  <TextBlock x:Name="SelectedUnitText" Text="未选择单位"
+                             FontSize="18" FontWeight="SemiBold" Foreground="#172033" />
+                  <TextBlock x:Name="UnitOutputPathText" Margin="0,5,12,0"
+                             Foreground="#6B7280" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button x:Name="OpenUnitOutputButton" Grid.Column="1" Content="打开目录"
+                        Click="OpenUnitOutput" IsEnabled="False" />
+              </Grid>
+
+              <Grid Grid.Row="1" Margin="0,14,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                  <TextBlock Text="注册表" Foreground="#6B7280" />
+                  <TextBlock x:Name="UnitRegistryText" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Text="Rules 段" Foreground="#6B7280" />
+                  <TextBlock x:Name="UnitRulesCountText" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                  <TextBlock Text="Art 段 / 素材" Foreground="#6B7280" />
+                  <TextBlock x:Name="UnitArtCountText" Margin="0,3,0,0" />
+                </StackPanel>
+              </Grid>
+
+              <Border Grid.Row="2" BorderBrush="#D6DAE1" BorderThickness="1"
+                      Background="#FFFFFF">
+                <DockPanel>
+                  <TextBlock DockPanel.Dock="Top" Text="提取内容" FontWeight="SemiBold"
+                             Padding="10,8" Background="#F7F8FA" />
+                  <TextBox x:Name="UnitPreviewText" IsReadOnly="True" BorderThickness="0"
+                           Padding="10" FontFamily="Consolas" TextWrapping="Wrap"
+                           VerticalScrollBarVisibility="Auto" />
+                </DockPanel>
+              </Border>
+
+              <Grid Grid.Row="3" Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <CheckBox x:Name="OverwriteUnitCheck" Content="覆盖已有单位包"
+                          IsChecked="True" VerticalAlignment="Center" />
+                <Button x:Name="ExtractUnitButton" Grid.Column="1" Content="提取单位"
+                        Click="ExtractUnit" IsEnabled="False" MinWidth="110" Margin="8,0,0,0" />
+              </Grid>
+            </Grid>
+          </Grid>
+        </Grid>
+      </TabItem>
+    </TabControl>
   </DockPanel>
 </Window>
