@@ -5,6 +5,9 @@
 class CCINIClass;
 class INIClass;
 
+// Runtime overlay parser plus shared directory/list-copy helpers. Startup
+// patches use IniPatch/StartupPatch instead: they need true instruction order.
+// Do not enable -= here; Runtime removal restores its baseline by design.
 namespace IniOverlay {
 
     constexpr int kMaxFiles = 256;

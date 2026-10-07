@@ -450,8 +450,8 @@ namespace {
                             Log::Warn("%s: ignored invalid key %s:%d",
                                       Tag(ctx.logTag), path, lineNumber);
                         } else if (_stricmp(key, "-") == 0 && !IsIncludeSection(section)) {
-                            RecordError(ctx.stats, "%s:%d -= is only valid in remove/rules", path, lineNumber);
-                            Log::Warn("%s: deletion command outside remove/rules %s:%d",
+                            RecordError(ctx.stats, "%s:%d -= is not supported in runtime overlays; use startup inject/rules", path, lineNumber);
+                            Log::Warn("%s: deletion command in runtime overlay %s:%d",
                                       Tag(ctx.logTag), path, lineNumber);
                             valid = false;
                         } else {

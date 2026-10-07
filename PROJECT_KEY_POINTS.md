@@ -44,7 +44,7 @@ Hook 地址与目标 EXE 强绑定。任何 EXE 变化都必须重新做 IDA 和
 
 ## 3. 独立 include，而不是复用扩展 include
 
-本节描述 set 覆盖解析；remove 使用独立严格命令解析器，不能走普通 INI 合并。
+本节描述当前启动有序补丁；Runtime 仍使用独立的 IniOverlay 覆盖与基线机制。
 
 ra2hook 没有把自己的入口文件交给 `CCINIClass::ReadCCFile`。原因是 Ares 可能 Hook
 这个函数并自动展开 `[#include]`，会导致重复处理、顺序不确定和项目间耦合。
@@ -52,14 +52,12 @@ ra2hook 没有把自己的入口文件交给 `CCINIClass::ReadCCFile`。原因�
 最终方案：
 
 - 用 `CCFileClass` 获取散装或 MIX 中的原始 INI 字节；
-- 由 `IniOverlay` 解析普通段和私有 `[#include]`；
-- 先合并当前文件正文，再按 include 出现顺序递归合并；
-- 后写覆盖前写；
-- 循环 include 和超过 32 层的递归被拒绝；
-- set 缺失 include 与可恢复文本问题只记警告，不中断兄弟文件；
-- include 段本身不写入目标 INI；
-- `+=` 内部使用 `__RA2HOOK_APPEND_`，输出时使用 `RA2Hook_N`，不与
-  Ares/Phobos 的 `var_N` 冲突。
+- 由 `IniPatch` 逐行解析普通赋值、追加、删除和私有 `[#include]`；
+- include 在出现行深度优先展开，返回后继续父文件；后出现的操作优先；
+- 循环 include、超过 32 层、缺失文件或语法/资源错误拒绝该目标整个计划；
+- 全目标根文件/include 校验完成后，由 `StartupPatch` 按顺序修改目标；
+- include 段不写入目标；`+=`/`-=` 不作为普通键存储；
+- 追加时生成 `RA2Hook_N`，不与 Ares/Phobos 的 `var_N` 冲突。
 
 这使 inject 目录中的 include 成为 ra2hook 自己的配置入口，同时不改变原 MOD 的
 Ares/Phobos include 链。
@@ -69,45 +67,39 @@ Ares/Phobos include 链。
 项目早期曾考虑在 `ra2hook.ini` 中使用 `Files=`，但该配置不能表达一个文件究竟属于
 rules、art 还是其他对象，最终被删除。
 
-set 目标完全由目录决定：
+启动目标完全由目录决定：
 
 ```text
-inject/set/rules/*.ini
-inject/set/art/*.ini
-inject/set/ra2md/*.ini
-inject/set/ai/*.ini
-inject/set/uimd/*.ini
-inject/set/sound/*.ini
-inject/remove/rules/*.ini   # 首版唯一删除目标：INI_Rules
+inject/rules/*.ini   # 唯一允许 -= 显式删除的目标
+inject/art/*.ini
+inject/ra2md/*.ini
+inject/ai/*.ini
+inject/uimd/*.ini
+inject/sound/*.ini
 ```
 
-旧 `inject/enabled` 必须手动移动/改名为 `inject/set`；新方案不自动加载旧目录。
-`[Inject] Enabled` 名称不变，统一控制 set/remove；`Mix` 与 `inject/mix` 不变。
-两阶段仅在启动时执行，修改后须完整重启游戏。
+旧 enabled/set/remove 不自动加载，需迁移目标目录、合并删除行，并复核 include 路径
+及顺序。`[Inject] Enabled` 名称不变，`Mix` 与 `inject/mix` 不变。
+启动补丁修改后须完整重启游戏。
 
 每个目录支持多个入口文件，按不区分大小写的文件名排序。这个约定简单、可观察，且
 不需要为每一种目标继续扩展总配置格式。
 
-### 4.1 remove 是严格命令层，不是另一层普通 INI
+### 4.1 同文件有序变更，先规划再执行
 
-执行时序：全部主 set rules/ra2md/art 及各自私有 include 完成后，执行 remove；
-然后才调用 `RegisterInjectedTypes`、`ReloadInjectedGlobalRules` 和原生类型读取。
+普通赋值、`+=`、`-=` 按顺序交错执行，重复指令全部保留。删除后若再次赋值，以
+后值为准。主 rules/ra2md/art 完成后才调用类型补注册、全局重读和原生类型读取。
 
-- `[UNIT_ID]` 下重复 `-=Prerequisite` 等行按命令列表保留，不能解析/复制为普通 INI；
-- `[#include]` 支持 `+=path` 与普通 `key=path`，不允许 `-`；正文先于子 include，
-  路径先相对当前文件再走游戏/MIX；片段放在入口目录外，避免重复根扫描；
-- 段/键不区分大小写精确匹配；不存在则跳过，重复删除无害；禁止通配符、整段删除及
-  注册表/列表段，不注销类型；
-- 所有根文件和 include 必须全部读入/解析成功后才开始删除。缺失子文件、坏语法、
-  循环、深度超过 32 或资源超限均拒绝整个 remove 层，保留先前 set 写入；
-  remove 目录缺失是合法无操作；
-- 只删除 `INI_Rules` 显式 entry，不写 `no`/空值、不恢复旧层值、不修改默认值或
-  已缓存 TypeClass 数据。Dump 键缺失只证明显式删除，不保证生产限制解除。
+- include 在出现处展开；路径先当前文件、再游戏/MIX；片段避免与扫描入口重复。
+- 每个目标所有根/include 全部校验成功后才变更；失败是该目标零修改，而不是只取消
+  删除。原生执行失败停止剩余指令，不保证回滚。空目录是合法无操作。
+- rules 删除精确匹配，缺失跳过；禁止列表成员删除、通配符和整段删除，不注销单位。
+  注册表仍允许正常赋值/追加。
+- 只删 INI_Rules 显式 entry，不改默认值、缓存或恢复旧层；Dump 不证明玩法限制解除。
 
-原生 `Clear @0x5257C0` 的静态语义已通过目标 EXE 反汇编及 IDA 核实；适配器经链表
-精确预查找、传入存储大小写且非 null 的段/键名，并复查键缺失。27 组本地解析器与
-模拟适配器测试通过；完整 Win32 构建和游戏验证仍待做，不可将历史 set 实机结果算作
-remove 验收。完整约定见 [REMOVE_INI.md](./REMOVE_INI.md)。
+原生 `Clear @0x5257C0` 已静态核实；适配器精确预查找、传入存储大小写和非 null
+段/键名，再核验缺失。当前有序计划及模拟适配器测试已添加但未本地运行，交由 Actions；
+旧 27 组删除测试与历史实机结果不能作为新版本验收。详见 `INJECT_INI.md`、`REMOVE_INI.md`。
 
 ## 5. 写入 INI 不等于新增类型生效
 
@@ -153,8 +145,8 @@ Sound 是项目中最典型的失败驱动设计。以下候选点均被实机�
 
 最终拆分为：
 
-1. `0x52C6C4` 预读配置、注册 MIX、构建持久 sound 覆盖层；
-2. `0x7510F6` 只验证对象并做内存复制，不执行文件 I/O。
+1. `0x52C6C4` 预读配置、注册 MIX、构建 sound 有序补丁计划；
+2. `0x7510F6` 只验证对象并执行计划中的内存指令，不再读取补丁文件。
 
 这里的关键经验是：Hook 点不能只看“逻辑位置够晚”，还必须确认覆盖的是完整指令、
 被盗指令可安全重放、ESP/寄存器约定稳定，并用空配置连续启动排除控制流问题。
@@ -247,8 +239,8 @@ UI    <game>\ra2hook\ra2hook-ui.exe
 
 - 配置缺失时所有高风险功能默认关闭；
 - 日志无法创建时静默放弃日志，不让游戏崩溃；
-- set 单个 include 缺失时跳过并继续兄弟项；remove 任一读取/解析错误拒绝整个删除层，
-  不撤销已完成的 set 写入；
+- 启动任一根/include 读取或解析失败，该目标零修改，其他目标独立处理；
+  原生执行失败停止剩余指令并报告部分进度，不保证回滚；
 - 目标对象尚未装载时跳过该目标；
 - 运行时候选状态无效时保留上一代状态；
 - 高风险运行时键标记为 `RestartRequired`，不尝试强写。
@@ -282,7 +274,7 @@ Dump 使用引擎自己的文件类读取 MIX/加密资源，并从内存 INI �
 
 ## 17. 项目验收证据
 
-项目收尾所依据的证据包括：
+旧覆盖版本收尾所依据的历史证据包括（不代表当前有序补丁已验收）：
 
 - GitHub Actions 完整构建通过；
 - Syringe 能加载 DLL，游戏可以正常启动运行；
@@ -319,7 +311,7 @@ Dump 使用引擎自己的文件类读取 MIX/加密资源，并从内存 INI �
 8. 运行时测试应用、语法失败保留、删除回滚和离局回滚；
 9. LAN/Internet/Replay 仍拒绝写入；
 10. 日志、配置、补丁和 Dump 仍位于 `<game>\ra2hook`；
-11. 新 set/remove：迁移后不加载旧 enabled；跨入口/include 任一错误零删除、set 保留；
+11. 统一启动补丁：不加载旧目录；混合操作/include 原地执行，后出现者优先；预校验失败整目标零修改；
 12. 分开记录可移植测试、Clear 静态语义和游戏实测，不把其中一项当作另一项的证据。
 
 ## 20. 收尾结论
@@ -329,8 +321,8 @@ ra2hook 的关键成果不是单个 Hook，而是一条完整且可验证的链�
 ```text
 正确时机
   -> 独立解析
-  -> set 目标对象合并
-  -> remove 全层校验/显式键删除
+  -> 整目标有序计划预校验
+  -> 逐条赋值/追加/显式删键（后出现者优先）
   -> 类型补注册/全局段重读
   -> 原生消费
   -> 加载后诊断

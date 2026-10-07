@@ -1,7 +1,7 @@
 #pragma once
 
 #include "windows.h"
-#include "IniRemoval.h"
+#include "IniPatch.h"
 
 #include <memory>
 #include <string>
@@ -49,6 +49,9 @@ public:
     } Sections;
     std::vector<std::unique_ptr<INISection>> owned;
     std::vector<std::pair<std::string, std::string>> clearCalls;
+    std::vector<std::string> mutations;
+    bool failWrite = false;
+    bool wrongCaseWrite = false;
     INISection* CurrentSection = nullptr;
     bool unsafeClear = false;
     bool failClear = false;
@@ -56,7 +59,7 @@ public:
     INISection* Section(const std::string& name) const
     {
         for (const auto& section : owned)
-            if (IniRemoval::EqualName(section->Name, name)) return section.get();
+            if (IniPatch::EqualName(section->Name, name)) return section.get();
         return nullptr;
     }
     INIEntry* Entry(const std::string& section, const std::string& key) const
@@ -64,7 +67,7 @@ public:
         const auto* target = Section(section);
         if (target) {
             for (const auto& entry : target->owned)
-                if (IniRemoval::EqualName(entry->Key, key)) return entry.get();
+                if (IniPatch::EqualName(entry->Key, key)) return entry.get();
         }
         return nullptr;
     }
@@ -83,6 +86,26 @@ public:
         else section->Entries.first = entry.get();
         section->owned.push_back(std::move(entry));
     }
+    bool WriteString(const char* sectionName, const char* key, const char* value)
+    {
+        if (!sectionName || !key || !value || !sectionName[0] || !key[0]) return false;
+        mutations.push_back(std::string("S:") + sectionName + ":" + key + "=" + value);
+        if (failWrite) return false;
+        auto* section = Section(sectionName);
+        auto* entry = Entry(sectionName, key);
+        // Production must preserve stored names to avoid case-sensitive native
+        // CRC lookup accidentally creating a second spelling of the same key.
+        if ((section && std::strcmp(section->Name, sectionName)) ||
+            (entry && std::strcmp(entry->Key, key))) {
+            wrongCaseWrite = true;
+            return false;
+        }
+        if (entry) {
+            entry->valueStorage = value;
+            entry->Value = entry->valueStorage.data();
+        } else Add(sectionName, key, value);
+        return true;
+    }
     void Clear(const char* sectionName, char* key)
     {
         if (!sectionName || !sectionName[0] || !key || !key[0]) {
@@ -90,6 +113,7 @@ public:
             return;
         }
         clearCalls.emplace_back(sectionName, key);
+        mutations.push_back(std::string("R:") + sectionName + ":" + key);
         CurrentSection = nullptr;
         if (failClear) return;
         auto* section = Section(sectionName);

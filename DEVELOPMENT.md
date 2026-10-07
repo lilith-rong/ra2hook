@@ -5,8 +5,8 @@
 > **事实来源**：本文中标注为「已核实」的内容均来自 YRpp / Phobos 上游源码与 Ares 官方文档的实际抓取，见 §9
 >
 > **阅读提示**：v0.2 正文保留早期开发记录，不代表当前实现/验收状态；历史实机结果见
-> `INJECT_INI.md`。新增 set/remove 的实现与测试状态见 §4.9 和 `REMOVE_INI.md`；
-> 本地测试已通过，完整 Win32 构建和游戏验证仍待执行。
+> `INJECT_INI.md`。当前统一有序补丁见 §4.9 和 `REMOVE_INI.md`；本轮仅静态核验，
+> 新测试与完整 Win32 构建交给 Actions，游戏验证仍待执行。
 
 ---
 
@@ -272,7 +272,7 @@ pTarget->WriteString(section, key, value);
 - ✅ 写入方式与引擎自身一致,下游读取者无法区分
 - ✅ 原始字节通过 `CCFileClass` 获取，仍支持散装文件和已注册 MIX 内文件
 - ✅ 不调用 `CCINIClass::ReadCCFile`，不会被 Ares 的原生 include hook 重复展开
-- ✅ inject 文件内可用 ra2hook 私有 `[#include]`:当前文件先合并,再按 include 出现顺序深度优先合并引用文件；重复的 `+=文件.ini` 会保留；该段不写入目标对象,不参与 Ares/Phobos 原 include 链
+- ✅ inject 私有 `[#include]` 在出现行原地深度优先展开，返回后继续父文件；重复 `+=文件.ini` 保留；该段不写入目标，也不参与 Ares/Phobos 原链（旧版正文先于 include 的顺序已替换）
 - ❌ 不复刻 Ares 其他扩展语义（如 `$Inherits`）。需求是独立注入机制,不是复制 Ares INI 处理器
 
 **路线 B:`ReadCCFile` 直接读进目标 `CCINIClass`**
@@ -352,31 +352,28 @@ DEFINE_HOOK(0x679A1B, RA2Hook_RulesInject_PostAresPhobos, 0x5)
 
 `DEFINE_HOOK(addr, funcname, size)` 展开为 `declhook` + `EXPORT_FUNC`（已核实）——它把 hook 声明写进 DLL 导出表,Syringe 启动时读取。**这就是"不需要自己写 trampoline"的全部原因**:寄存器保存、现场恢复、被覆盖指令的重放全部由 Syringe 负责。
 
-### 4.9 set/remove 管线
+### 4.9 统一有序启动补丁
 
-- 既有六个目标全部从 `inject/enabled/<target>` 改为 `inject/set/<target>`。
-  用户须手动移动/改名旧目录，保留子目录；不自动加载旧 enabled。
-- `[Inject] Enabled` 不改名，同时控制 set/remove；`Mix` 与 `inject/mix` 不变。
-- 首版仅支持 `inject/remove/rules/*.ini`，只删除 `INI_Rules` 的显式键。
-  完成主 set rules/ra2md/art 及其私有 include 后，先 remove，再
-  `RegisterInjectedTypes`、`ReloadInjectedGlobalRules`，最后继续原生类型读取。
-- remove 是独立严格命令解析器，不创建/复制普通游戏 INI 覆盖层。`[UNIT_ID]` 下重复
-  `-=Key` 必须完整保留；正文先于 child include，子路径先当前文件目录、再游戏/MIX。
-  `[#include]` 支持 `+=path` 和命名/编号 `key=path`，但不允许 `-`。
-- 所有入口和 include 必须全部读取/解析成功，才执行任何删除。缺失子文件、坏语法
-  （正文 `+=`、`Foo=no`、空 `-=` 等）、循环、深度超过 32 或资源超限均拒绝整个
-  remove 层；set 写入保留。remove 目录缺失是合法无操作。
-- 段名/键名不区分大小写精确匹配，不存在则跳过，重复删除无害；拒绝注册表/列表段、
-  通配符和整段删除，不注销单位。不写 `no`/空值、不恢复旧覆盖层值、不修改默认值或
-  已缓存 TypeClass 数据。编辑后必须完整重启游戏。
+- 六个目标统一为 `inject/<target>`，不自动加载旧 enabled/set/remove，发现时告警。
+- `[Inject] Enabled` 和 Mix 开关不变；根文件按文件名排序，文件内逐行处理。
+- `IniPatch` 生成有序 set/append/remove 计划；include 在其出现处展开，然后继续父文件。
+  `StartupPatch` 按顺序执行，后续赋值可以恢复前面删除的键，不再有最终删除阶段。
+- 每个目标全部根文件/include 读取及解析成功后才修改该对象；语法、缺失文件、循环或
+  限额失败时，该目标赋值/追加/删除全部不执行。原生执行失败停止但不保证回滚。
+- 只有 rules 允许 `-=Key`。重复指令不折叠；`+=Value` 生成独立 RA2Hook_N 项。
+  注册表允许写入/追加，禁止删除成员；不支持通配符、整段删除或单位注销。
+- 删除精确匹配显式 entry，不改默认值、旧值或缓存。修改后必须完整重启游戏。
+- 主 rules/ra2md/art 补丁完成后再补注册类型、重读全局段，继续原生类型读取。
+  sound 在原安全挂点预解析计划，应用挂点仅执行内存指令；Runtime 仍用 IniOverlay。
 
 目标 MD5 `56d582a1d6f3c144d3adc867d7a4d91b` 的 `Clear @0x5257C0` 已静态反汇编：
 清理 `CurrentSection` 缓存 `+0x4/+0x8`；null section 整体重置，null key 整段删除；
 两者非 null 才走 `EntryIndex` 删除及 entry 虚析构。适配器须先经链表精确查找，使用
 实际存储大小写、非 null 的段/键名调用，再复查缺失；不能靠哈希命中或返回值替代检查。
 
-完整语法、实际限额和已通过的本地测试见 `REMOVE_INI.md`。27 组解析器及模拟适配器
-测试通过，原生 Clear 已由 IDA 复核；完整 Win32 构建和游戏验证仍待执行。
+完整语法和限额见 `INJECT_INI.md`、`REMOVE_INI.md`。旧独立删除的 27 组测试与
+ASan/UBSan 结果仅为历史证据；当前有序补丁的测试交由 Actions，本轮未本地编译。
+原生 Clear 已由 IDA 复核；完整 Win32 构建和游戏验证仍待执行。
 Dump 键缺失证明显式删除，不证明生产限制解除。
 
 ---
@@ -427,12 +424,12 @@ UI 操作见 `RUNTIME_INI.md`。
 ```
 1. 新旧位置均无 ra2hook.ini → 使用安全默认值，dump/inject/runtime 全部关闭
 2. 对应 section 不存在      → 该子系统使用默认值，不回退读取其他 section
-3. Inject.Enabled == no     → set/remove 两阶段都不执行（开关名称不变）
-4. set 目标目录文件缺失     → 记录 WARN；按文件名顺序合并其余现有文件
-5. remove 任一根/include 读取或解析失败 → 整个删除层不执行，保留 set 写入
-6. remove/rules 目录不存在 → 合法无操作
+3. Inject.Enabled == no     → 全部启动补丁不执行（开关名称不变）
+4. inject/<target> 目录不存在/为空 → 合法无操作
+5. 任一根/include 读取或解析失败 → 该目标零修改，其他目标独立处理
+6. 原生补丁指令执行失败     → 停止剩余指令，记录部分进度，不保证回滚
 7. Runtime.Enabled == no    → IPC 仍可报告状态，但拒绝所有游戏数据写入
-8. runtime 文件语法/include 错误 → 保留上一代有效状态，不做部分应用
+8. runtime 致命解析/校验错误 → 保留上一代有效状态；既有可恢复警告策略不变
 ```
 
 **任何失败都不得阻止游戏启动。** 装不上就不装,把原因写清。崩在启动阶段会让用户完全无法定位问题。

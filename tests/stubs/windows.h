@@ -40,4 +40,16 @@ inline int _stricmp(const char* left, const char* right)
         if (a != b || !a || !b) return static_cast<int>(a) - static_cast<int>(b);
     }
 }
+inline int _strnicmp(const char* left, const char* right, std::size_t count)
+{
+    while (count--) {
+        const auto fold = [](unsigned char c) {
+            return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + 32) : c;
+        };
+        const auto a = fold(static_cast<unsigned char>(*left++));
+        const auto b = fold(static_cast<unsigned char>(*right++));
+        if (a != b || !a || !b) return static_cast<int>(a) - static_cast<int>(b);
+    }
+    return 0;
+}
 #endif

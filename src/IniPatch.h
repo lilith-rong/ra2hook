@@ -4,9 +4,10 @@
 #include <string>
 #include <vector>
 
-// Engine-independent, strict parser for remove manifests. No INI writes occur
-// here: repeated -= lines are commands, not duplicate keys named "-".
-namespace IniRemoval {
+// Startup-only ordered patch plan. Unlike an INI dictionary, this preserves
+// repeated assignments, += and -=, and expands includes at their source line.
+// Runtime keeps its existing IniOverlay parser and does not consume this plan.
+namespace IniPatch {
 
     constexpr std::size_t kMaxFileBytes = 8 * 1024 * 1024;
     constexpr std::size_t kMaxTotalBytes = 64 * 1024 * 1024;
@@ -21,9 +22,13 @@ namespace IniRemoval {
         std::string text;
     };
 
+    enum class Operation { Set, Append, Remove };
+
     struct Command {
+        Operation operation = Operation::Set;
         std::string section;
-        std::string key;
+        std::string key;   // Empty for Append: the executor allocates a fresh key.
+        std::string value; // Empty for Remove; empty Set values are legal.
         std::string file;
         std::size_t line = 0;
     };
@@ -31,6 +36,7 @@ namespace IniRemoval {
     struct Plan {
         std::vector<Command> commands;
         std::size_t files = 0;
+        bool allowRemoval = false;
     };
 
     struct Error {
@@ -39,18 +45,20 @@ namespace IniRemoval {
         std::string message;
     };
 
-    // The reader tries relative to the containing file first, then the game
-    // directory/engine filesystem. On failure it supplies a diagnostic.
     using Reader = bool (*)(const std::string& request,
                             const std::string& containingFile,
                             Source& source, std::string& error, void* context);
 
     bool EqualName(const std::string& left, const std::string& right);
     std::string NormalizePath(const std::string& path);
+    bool IsRemovalTarget(const std::string& section, const std::string& key);
 
-    // roots must already be sorted by the caller. On ANY failure output is
-    // empty. Only a successfully built plan may be applied to a live INI.
+    // roots are supplied in sorted order. Includes execute exactly where they
+    // occur, then the caller resumes its own section/line. ANY read/parse failure
+    // leaves output empty. No engine mutation takes place while building a plan.
+    // Removal is opt-in and must only be enabled for startup INI_Rules.
     bool BuildPlan(const std::vector<std::string>& roots, Reader reader,
-                   void* context, Plan& output, Error& error);
+                   void* context, Plan& output, Error& error,
+                   bool allowRemoval = false);
 
-} // namespace IniRemoval
+} // namespace IniPatch

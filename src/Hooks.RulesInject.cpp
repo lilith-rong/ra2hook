@@ -13,7 +13,7 @@
 //
 // 【本轮实现】多目标注入：
 //   每个引擎 INI 对象（rules/ra2md/art/ai/uimd/sound）对应一个注入目录：
-//     ra2hook/inject/set/<target>/*.ini
+//     ra2hook/inject/<target>/*.ini
 //   目标表见 kTargets。装载时机均已核实（IDA，gamemd.exe 0x400000）：
 //     - rules  挂点 0x679A1B：在 0x679A15 的 Ares/Phobos 处理之后、类型读取之前
 //     - ra2md  与 rules 同一窗口（引擎先读 ra2md.ini 再读 rulesmd.ini）
@@ -24,20 +24,21 @@
 //     - uimd   UIMD.INI 于 sub_534FA0 0x535311 读进 INI_UIMD
 //               → 独立挂点 0x53531A（装载完成后、数据读取 0x53533d 之前）
 //     - sound  使用两个独立挂点。0x52C6C4 在打开 SOUNDMD.INI 前预读配置、注册
-//              MIX，并把 set/sound 合并到持久内存对象；0x7510F6 在
-//              sub_7510D0 内取得 ECX=SOUNDMD 对象，只把预备内容复制进去。
+//              MIX，并把 sound 补丁预解析为有序计划；0x7510F6 在
+//              sub_7510D0 内取得 ECX=SOUNDMD 对象，仅执行内存命令。
 //              旧 0x52C796（relative call）、0x52C78F（ESP-relative lea）和
 //              0x7510D0（修改 ESP）均已实测会在 SyringeIH 下崩溃，不能使用。
 //   InjectTarget 用「目标对象段数>0」作守卫：若某个对象尚未装载（或装载失败
 //   后段数为 0）则跳过，避免写进无效对象。
-//   注入目标只由 set/<target> 目录决定，不存在跨目标的全局文件列表。
-//   主钩子完成 set 后，独立解析 remove/rules 的 -=属性名 清单并删除显式键；
-//   整层校验失败不执行任何删除，不修改默认值或已解析类型字段。
+//   注入目标只由 inject/<target> 目录决定，不存在跨目标的全局文件列表。
+//   每个目标的全部根文件/include 先校验为有序计划，成功后逐行执行赋值、
+//   += 追加和 -= 删除（仅 rules）；后出现者优先，不存在最终 remove 阶段。
+//   预校验失败该目标零修改；原生执行失败停止但不承诺回滚。默认值不变。
 //   inject 文件内的 [#include] 由 ra2hook 自己展开，独立于 Ares/Phobos：
 //     - 不修改原 rules/art 的 [#include] 段
 //     - 不把 inject 文件自己的 [#include] 段写入引擎目标对象
-//     - 先合并当前文件，再按 include 键顺序深度优先合并被引用文件
-//     - 文件内容通过 CCFileClass 原始读取后由本文件解析，不调用
+//     - 在 include 所在行深度优先展开，返回后继续父文件后面的行
+//     - 文件内容通过 CCFileClass 原始读取后由 IniPatch 解析，不调用
 //       CCINIClass::ReadCCFile，避免 Ares 的 ReadCCFile hook 自动展开一次。
 //
 // 【mix 装载】ra2hook/inject/mix/*.mix 在首次目标注入前全部 new MixFileClass 注册进引擎
@@ -72,10 +73,11 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstring>
 
 #include "Config.h"
 #include "IniOverlay.h"
-#include "RulesRemoval.h"
+#include "StartupPatch.h"
 #include "GamePaths.h"
 #include "Logger.h"
 
@@ -87,7 +89,9 @@ namespace RulesInject {
     static bool s_sound_prepare_done = false; // 0x52C6C4：文件 I/O 阶段幂等
     static bool s_sound_apply_done = false;   // 0x7510F6：内存应用阶段幂等
     static bool s_mix_done = false;   // mix 注册幂等；sound/ai/uimd 可能早于主钩子
-    static CCINIClass* s_sound_overlay = nullptr; // 引擎分配，进程结束前有意保留
+    static bool s_legacy_warned = false;
+    static bool s_sound_ready = false;
+    static IniPatch::Plan s_sound_plan; // DLL-owned data, never a staging INI
 
     static const char* kInjectRoot = "ra2hook\\inject";
     static const char* kMixDir     = "ra2hook\\inject\\mix";
@@ -97,7 +101,7 @@ namespace RulesInject {
     // 每个目标 = { 目录名, 引擎对象名（日志）, 取对象指针，是否已挂载 }
     // 注意 INI_Rules 是 CCINIClass*（指针），其余是 CCINIClass（对象，需取址）。
     static struct Target {
-        const char* dir;                // set/ 下的子目录
+        const char* dir;                // inject/ 下的目标子目录
         const char* label;              // 日志名
         CCINIClass* (*get)(void);      // 取目标对象
         bool        mapped;             // 已确认的注入时机
@@ -113,35 +117,6 @@ namespace RulesInject {
     static int CountSections(INIClass* pINI)
     {
         return IniOverlay::CountSections(pINI);
-    }
-
-    static int MergeFile(CCINIClass* pTarget, const char* path)
-    {
-        if (!pTarget || !path || !path[0]) return -1;
-
-        CCINIClass staging;
-        IniOverlay::MergeStats stats;
-        const int keys = IniOverlay::MergeFile(&staging, path, &stats,
-                                               "inject", true);
-        if (keys < 0 || stats.errors > 0) {
-            Log::Warn("inject: rejected %s: %s", path,
-                      stats.firstError[0] ? stats.firstError : "read/parse failure");
-            return -1;
-        }
-
-        if (stats.warnings > 0) {
-            Log::Warn("inject: %s encountered %d recoverable issue(s): %s",
-                      path, stats.warnings,
-                      stats.firstWarning[0] ? stats.firstWarning : "ignored INI issue");
-        }
-
-        if (stats.appends > 0) {
-            Log::Info("inject: %s preserved %d += append item(s)",
-                      path, stats.appends);
-        }
-
-        IniOverlay::Copy(pTarget, &staging, false, true);
-        return keys;
     }
 
     static bool FileExistsInEngineFS(const char* path)
@@ -162,16 +137,35 @@ namespace RulesInject {
         return IniOverlay::ScanDirectory(absolute, wildcard, files);
     }
 
-    static bool SetDirectory(const char* target, char* directory, size_t capacity)
+    static void WarnLegacyDirectories()
     {
+        if (s_legacy_warned) return;
+        s_legacy_warned = true;
+        for (const char* name : { "enabled", "set", "remove" }) {
+            char relative[kPathMax] = {};
+            char absolute[kPathMax] = {};
+            std::snprintf(relative, sizeof(relative), "%s\\%s", kInjectRoot, name);
+            if (!GamePaths::Build(absolute, sizeof(absolute), relative)) continue;
+            const DWORD attributes = GetFileAttributesA(absolute);
+            if (attributes != INVALID_FILE_ATTRIBUTES &&
+                (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                Log::Warn("inject: legacy directory %s is NOT loaded; migrate to inject/<target> "
+                          "and review line/include order (see INJECT_INI.md)", absolute);
+            }
+        }
+    }
+
+    static bool TargetDirectory(const char* target, char* directory, size_t capacity)
+    {
+        WarnLegacyDirectories();
         char relative[kPathMax] = {};
         const int written = std::snprintf(relative, sizeof(relative),
-                                          "%s\\set\\%s", kInjectRoot, target);
+                                          "%s\\%s", kInjectRoot, target);
         return written > 0 && written < kPathMax &&
                GamePaths::Build(directory, capacity, relative);
     }
 
-    // 对单个目标：扫描 set/<dir>，把目标对象注入。
+    // 对单个目标：扫描 inject/<dir>，整目标校验后按计划顺序执行。
     // 守卫：目标对象必须已装载（段数>0）才注入，否则写进未装载/未就绪的
     // 对象是无效的（引擎可能在装载时重建/覆盖该对象）。
     // 各目标装载时机：
@@ -181,25 +175,13 @@ namespace RulesInject {
     static int InjectTarget(const Target& t)
     {
         char dir[kPathMax] = {};
-        if (!SetDirectory(t.dir, dir, sizeof(dir))) {
-            Log::Warn("inject: 无法确定 set/%s 目录，跳过", t.dir);
-            return 0;
-        }
-
-        char found[kMaxFiles][kPathMax] = {};
-        const int n = ScanDir(dir, "*.ini", found);
-        if (n < 0) {
-            Log::Warn("inject: 无法完整扫描目录 %s，跳过", dir);
-            return 0;
-        }
-        if (n == 0) {
-            Log::Info("inject: 目录 %s 无 ini（空），跳过", dir);
+        if (!TargetDirectory(t.dir, dir, sizeof(dir))) {
+            Log::Warn("inject: 无法确定 inject/%s 目录，跳过", t.dir);
             return 0;
         }
 
         if (!t.mapped) {
-            Log::Info("inject: %s 目录 %s 有 %d 个 ini，但挂点未定，跳过",
-                      t.label, dir, n);
+            Log::Info("inject: %s 目录 %s 挂点未定，跳过", t.label, dir);
             return 0;
         }
 
@@ -218,17 +200,15 @@ namespace RulesInject {
             return 0;
         }
 
-        int total = 0;
-        for (int i = 0; i < n; ++i) {
-            const int k = MergeFile(obj, found[i]);
-            if (k < 0) continue;
-            total += k;
+        StartupPatch::Stats stats;
+        const bool success = StartupPatch::ApplyDirectory(
+            obj, dir, _stricmp(t.dir, "rules") == 0, stats);
+        if (!success) {
+            Log::Warn("inject: %s 补丁未完整应用，详见 patch 日志", t.label);
         }
-
-        Log::Info("inject: %s <- %s（%d 文件，%d 键）",
-                  t.label, dir, n, total);
-        Log::Info("inject: %s 注入后段数 %d->%d",
-                  t.label, objSec, obj ? CountSections(obj) : -1);
+        const int total = static_cast<int>(stats.writes + stats.appends + stats.removals);
+        Log::Info("inject: %s <- %s（%d 条变更）", t.label, dir, total);
+        Log::Info("inject: %s 注入后段数 %d->%d", t.label, objSec, CountSections(obj));
         return total;
     }
 
@@ -870,16 +850,14 @@ namespace RulesInject {
         for (int i = 0; i < kReadyAtMain; ++i)
             total += InjectTarget(kTargets[i]);
 
-        // Remove only explicit INI keys after every main set/include has
-        // completed, before registry/global readers and native type loading.
-        // A rejected remove layer leaves all successful set writes intact.
-        RulesRemoval::Apply(pINI);
-
+        // Each target has already applied its ordered set/append/remove plan.
+        // Registration/global readers must observe the FINAL rules state;
+        // never replay a separate deletion pass after later assignments.
         RegisterInjectedTypes(pINI, beforeLists);
         // Match the native Read_File dependency order: list registries exist
         // before global sections that may resolve references to those types.
         ReloadInjectedGlobalRules(pINI, beforeGlobals);
-        Log::Info("inject: 目标目录注入完成（rules/ra2md/art），共 %d 键", total);
+        Log::Info("inject: 目标目录注入完成（rules/ra2md/art），共 %d 条变更", total);
     }
 
     // ai 钩子 0x52D37D：AIMD.INI 已于 0x52d378 读进 INI_AI（装载完成），
@@ -931,33 +909,22 @@ namespace RulesInject {
             InjectMix();
 
         char dir[kPathMax] = {};
-        if (!SetDirectory("sound", dir, sizeof(dir))) {
-            Log::Warn("inject.sound: 无法确定 set/sound 目录，跳过");
+        if (!TargetDirectory("sound", dir, sizeof(dir))) {
+            Log::Warn("inject.sound: 无法确定 inject/sound 目录，跳过");
             return;
         }
 
-        CCINIClass staging;
-        IniOverlay::MergeStats stats;
-        if (!IniOverlay::MergeDirectory(&staging, dir, &stats, "inject.sound")) {
-            Log::Warn("inject prepare @0x52C6C4: SOUNDMD 覆盖层构建失败，整层跳过：%s",
-                      stats.firstError[0] ? stats.firstError : "read/parse failure");
+        s_sound_ready = StartupPatch::Prepare(dir, false, s_sound_plan);
+        if (!s_sound_ready) {
+            Log::Warn("inject prepare @0x52C6C4: SOUNDMD 补丁计划校验失败，整目标跳过");
             return;
         }
-
-        const int sections = CountSections(&staging);
-        if (sections <= 0) {
-            Log::Info("inject prepare @0x52C6C4: 目录 %s 无可应用内容", dir);
-            return;
-        }
-
-        s_sound_overlay = GameCreate<CCINIClass>();
-        IniOverlay::Copy(s_sound_overlay, &staging);
-        Log::Info("inject prepare @0x52C6C4: SOUNDMD 覆盖层已就绪（%d 文件，%d 段，%d 键）",
-                  stats.files, sections, stats.keys);
+        Log::Info("inject prepare @0x52C6C4: SOUNDMD 有序计划已就绪（%zu 文件，%zu 条指令）",
+                  s_sound_plan.files, s_sound_plan.commands.size());
     }
 
     // 0x7510F6 位于 sub_7510D0 内，0x7510F4 已执行 mov ecx,edi，因此 ECX
-    // 是完成原始 SOUNDMD.INI 装载的局部 CCINIClass。这里只做内存复制，随后
+    // 是完成原始 SOUNDMD.INI 装载的局部 CCINIClass。这里只执行内存指令，随后
     // 原函数从 0x751114 开始读取 [Defaults]，之后再处理 [SoundList]。
     static void ApplyPreparedSound(CCINIClass* pSoundIni)
     {
@@ -968,7 +935,7 @@ namespace RulesInject {
             Log::Warn("inject apply @0x7510F6: SOUNDMD 覆盖层尚未预备，跳过");
             return;
         }
-        if (!s_sound_overlay) return;
+        if (!s_sound_ready || s_sound_plan.commands.empty()) return;
 
         if (!pSoundIni) {
             Log::Warn("inject apply @0x7510F6: SOUNDMD CCINIClass 为 null，跳过");
@@ -982,8 +949,11 @@ namespace RulesInject {
         }
 
         const int before = CountSections(pSoundIni);
-        IniOverlay::Copy(pSoundIni, s_sound_overlay, false, true);
-        Log::Info("inject apply @0x7510F6: SOUNDMD 覆盖已应用到 %p（段数 %d->%d）",
+        StartupPatch::Stats stats;
+        const bool success = StartupPatch::Apply(pSoundIni, s_sound_plan, stats);
+        s_sound_plan = {}; // No more file reads, parsing, or engine-owned staging.
+        Log::Info("inject apply @0x7510F6: SOUNDMD 有序补丁 %s %p（段数 %d->%d）",
+                  success ? "applied to" : "failed on",
                   static_cast<void*>(pSoundIni), before, CountSections(pSoundIni));
     }
 

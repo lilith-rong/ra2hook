@@ -1,127 +1,96 @@
-# 启动 remove 层
+# 同一启动补丁中的显式属性删除
 
-set/remove 已实现：独立解析器和生产适配器（使用模拟引擎接口）共 27 组测试通过，
-并通过 AddressSanitizer / UndefinedBehaviorSanitizer 检查。原生 `Clear` 已在目标
-二进制中通过反汇编及 IDA 反编译核实。完整 Win32 DLL 编译和游戏内验证仍待执行。
+当前不再使用独立的 `inject/remove` 目录。删除与普通赋值放在同一份
+`ra2hook/inject/rules/*.ini` 中，按文件名排序、文件内从上到下交错执行。
+完整目录、include 和迁移说明见 [INJECT_INI.md](./INJECT_INI.md)。
 
-## 目录、开关与时序
-
-- 所有既有覆盖目标从 `inject/enabled/<target>` 改为 `inject/set/<target>`。
-  请手动移动/改名旧 `enabled` 目录并保留子目录；新方案不自动加载旧路径。
-- `[Inject] Enabled` 保留名称，统一控制 set 和 remove；`Mix` 与 `inject/mix` 不变。
-- 首版仅扫描 `<game>/ra2hook/inject/remove/rules/*.ini`，按不区分大小写的文件名排序。
-  只操作 `INI_Rules`，其他目标的 remove 目录不受支持；目录不存在是合法无操作。
-- set/remove 只在启动时执行，编辑、停用或删除文件后都须完整重启游戏。
-
-主 Hook `0x679A1B` 内的顺序：
-
-```text
-全部 set rules / ra2md / art 及各自私有 include 合并完成
-  -> 读取并严格解析所有 remove/rules 入口及其 include，收集完整命令列表
-  -> 全部成功才删除 INI_Rules 的显式键；失败则整个 remove 层不执行
-  -> RegisterInjectedTypes
-  -> ReloadInjectedGlobalRules
-  -> 继续原程序的 TypeClass / art 等读取
-```
-
-ai/uimd/sound 的既有 set 挂点不变。remove 校验失败不会撤销先前 set 写入，也不应阻止
-原有注册、重读和启动流程。这里保证的是**全层读入/解析成功前零删除**，不是引擎调用
-失败时的事务回滚承诺。
-
-## 严格命令语法
-
-remove 使用独立命令解析器，**绝不作为普通游戏 INI 解析或复制**；重复 `-=` 行按
-命令列表保留，不能用只保留最后一个 `-` 键的普通 INI 字典表示。
-
-以下是手动配置示例，不会在仓库创建生效的删除文件。假设入口为
-`ra2hook/inject/remove/rules/10-unit.ini`，片段放在入口目录之外：
+## 语法和顺序
 
 ```ini
-[UNIT_ID]
+[HTNK]
+Strength=800
 -=Prerequisite
+Prerequisite=GAWEAP
 -=FactoryOwners
 -=ForbiddenHouses
--=Prerequisite
-
-[#include]
-+=../fragments/owners.ini
-1=../fragments/houses.ini
-extra=unique_remove_fragment.ini
 ```
 
-`UNIT_ID` 应替换成目标定义段的真实 ID。片段也使用同一命令语法，例如
-`ra2hook/inject/remove/fragments/owners.ini`：
+最终 Prerequisite 为 GAWEAP，FactoryOwners/ForbiddenHouses 的显式键缺失。
+删除没有最终优先权：后面任何行、include 或根文件的赋值都可以重新建立同一个键。
+只删除时保留 `-=属性名` 即可；不需要写原值。
+
+- `Key=Value`：普通新增/覆盖，空值合法但不是删除。
+- `+=Value`：独立追加项，生成不占用原键的 `RA2Hook_N`；不是算术或属性列表拼接。
+- `-=Key`：只删除当前段中的一个确切属性。
+- 特殊 `+`/`-` 指令从原始行解析，不能作为普通 INI 同名键存储，不能折叠重复行。
+
+include 在出现的那一行立即展开：
 
 ```ini
-[UNIT_ID]
--=RequiredHouses
+[#include]
++=../fragments/vehicles.ini
+extra="../fragments/extra properties.ini"
+
+[HTNK]
+Prerequisite=GAWEAP
 ```
 
-规则：
+如果片段里删除 Prerequisite，上面父文件末尾的赋值会恢复它。
+`[#include]` 中允许 `+=路径` 或命名/编号 `key=路径`，不允许 `-=路径`。
+片段应放在入口目标目录之外，避免同时扫描和引用导致重复执行。
 
-- 普通定义段内只允许 `-=非空键名`；`+=Key`、`Foo=no`、空 `-=` 都是错误。
-- `[#include]` 只允许 `+=路径` 或普通命名/编号 `key=路径`；路径不能为空，
-  `-` 不能作为 include 键（`-=path` 非法）。
-- 先收集当前文件正文删除命令，再按 include 出现顺序递归处理子文件。
-- 子路径先相对当前文件查找，再走游戏/MIX 文件系统；MIX 必须按既有规则注册。
-- included 片段应放在入口 `remove/rules` 文件夹之外，否则也会被扫描为独立入口。
-  重复删除是幂等的，但重复加载仍消耗资源限额。
-- 段名和键名不区分大小写、精确匹配；不存在的段/键跳过，重复删除无害。
-- 不支持通配符或整段删除。注册表/列表段会被拒绝，包括类型列表（如
-  `[VehicleTypes]`、`[WeaponTypes]`、`[Projectiles]` 及兼容别名 `[Projectile]`）等；
-  remove 不能用于注销单位或其他类型。
+## 安全边界
 
-## 全层失败规则
+- 仅 rules 目标允许删除；其他目标出现 `-=` 会拒绝整个目标计划。
+- 段名/键名大小写不敏感、精确匹配。`Prerequisite` 不匹配 `Prerequisite.X`。
+- 缺失段/键跳过；重复删除幂等。删除最后一个属性也不额外删除整个段。
+- 每行只有一个键名，不允许空键、通配符、逗号清单、整段删除。
+- 类型注册表和结构列表禁止删除成员，但仍允许正常赋值/追加。
+  包括 InfantryTypes、VehicleTypes、AircraftTypes、BuildingTypes、TerrainTypes、
+  SmudgeTypes、OverlayTypes、Animations、VoxelAnims、Warheads、Particles、
+  ParticleSystems、WeaponTypes、Projectiles、Projectile、SuperWeaponTypes、Countries、
+  Sides、AITriggerTypes、AITriggerTypesEnable、TeamTypes、TaskForces、ScriptTypes、
+  TriggerTypes、Triggers、Tags、Colors、ColorAdd。
+- 不注销单位，不写 no/空值，不自动恢复旧覆盖层值，不改默认兜底配置、继承、
+  已缓存 TypeClass 或扩展内部缓存。后续游戏读取仍沿原流程运行。
 
-**全部根 `*.ini` 和递归 include 必须都读取、解析并通过校验，才可执行第一条删除。**
-即使错误发生在最后一个根文件，也不能先删除前面根文件的键。以下任一问题拒绝整个层：
+这里的“删除”只意味着 INI_Rules 当前明确存储的 entry 不再存在。Dump 键缺失不保证
+解除建造/渗透/阵营条件；默认值如何处理不属于此功能。
 
-- 文件不可读取、子文件缺失；
-- 坏语法（包括正文 `+=`、普通赋值 `Foo=no`、空 `-=`、include 中 `-=`）；
-- 非法注册表/列表目标、通配符或整段删除请求；
-- include 循环、深度超过 32，或超出资源限制。
+## 整目标预校验与失败
 
-路径必须短于 260 字节，深度上限为 32。实现还限制：标识符短于 512 字节、
-单文件不超过 8 MiB、总输入不超过 64 MiB、入口不超过 256、加载文件不超过 4096、
-每文件 include 项不超过 4096、删除命令不超过 65536。不得截断后继续执行。
-支持 UTF-8（可带 BOM）及 ANSI/GBK；UTF-16、NUL 字节和非法标识符会被拒绝。
-正文 `-=Key ; 注释` 和带引号的 include 路径可用；命令不能混入 set 或 runtime。
+每个目标所有根文件、所有递归 include 都读取并严格解析成功后，才执行任何
+赋值、追加或删除。缺失文件、语法错误、循环、资源超限导致**该目标本次零修改**，
+其他目标独立处理；不是旧版“set 保留、remove 取消”。
 
-## 删除的含义与边界
+源文件名与行号记录在每条指令中。若执行时原生 WriteString/Clear 失败，停止剩余
+操作并报告已执行计数，不承诺事务回滚。完整读取预校验与执行失败回滚不是一回事。
+限制及编码规则见 INJECT_INI.md；UTF-16、NUL、空删除键均拒绝。
 
-remove 只删除 `INI_Rules` 中当前**显式存储**的 entry：
+## 原生删键适配
 
-- 不是写 `no`，也不是写空字符串；
-- 不恢复原始 INI、Ares/Phobos 或先前 set 覆盖层的旧值；
-- 不修改读取器默认值、已缓存的 TypeClass 字段或扩展内部缓存；
-- 不额外强制重读、清空类型数组或移除单位注册；既有后续读取仍按原流程执行。
+目标 gamemd.exe MD5 `56d582a1d6f3c144d3adc867d7a4d91b` 的
+`INIClass::Clear @0x5257C0` 曾经反汇编及 IDA 核实：
 
-因此，删除 `Prerequisite`、`FactoryOwners` 或 `ForbiddenHouses` 不承诺解除生产条件。
-缺省处理、继承、其他条件以及更早的缓存仍可能影响行为。Dump 中键缺失只能证明
-显式 entry 不再存在，不能证明默认效果或游戏玩法。
+- 清理 CurrentSection 相关缓存（偏移 +0x4/+0x8）。
+- section 为 null 会整体重置；key 为 null 会删除整个 section。
+- 两者都非 null 时，删除对应 EntryIndex 项并调用该 entry 的虚析构。
 
-这与运行时补丁移除键/文件后恢复本局基线不同；运行时目录和 UI 不消费 remove 命令。
-详见 [RUNTIME_INI.md](./RUNTIME_INI.md)。
+`src/StartupPatch.cpp` 先遍历段/键链表做精确预查找，使用实际存储的大小写，
+只以非空段名和非空键名调用 Clear，再复查缺失。不存在项不调用 Clear，
+不以 ReadString/GetKeyCount 的缺省或缓存回落判断存在性，也不手工摘链绕过原生维护。
+普通覆盖同样使用已存在的段/键大小写，防止生成重复拼写。
 
-## 原生适配与验证状态
+## 迁移与验证状态
 
-目标 `gamemd.exe` MD5 `56d582a1d6f3c144d3adc867d7a4d91b` 的
-`INIClass::Clear @0x5257C0` 已反汇编确认：
+旧 `enabled/set/remove` 不会自动加载；不要简单把旧 remove 与 set 同时放进新入口
+并假设删除仍最终优先。根据希望的执行顺序合并，或把兼容删除片段放入口目录外，
+由实际排序最后的根文件引用。旧 include“正文先于子文件”的顺序也需复核。
 
-- 清理 `CurrentSection` 相关缓存（对象偏移 `+0x4` / `+0x8`）；
-- section 为 null 会整体重置；key 为 null 会删除整个 section；
-- section/key 都非 null 时，通过 `EntryIndex` 删除并调用 entry 的虚析构。
+旧独立删除实现的 27 组测试、ASan/UBSan 及 Clear 静态核实属于历史结果。
+**当前有序实现新增 16 组规划器、12 组模拟适配器测试；本轮未本地编译或执行，
+由 GitHub Actions 验证。完整 Win32 DLL 和真实游戏验证仍待执行。**
+测试使用模拟引擎，不证明真实 ABI/Ares/Phobos 共存行为。
 
-适配器先遍历 section/entry 链表做不区分大小写的精确预查找，使用实际存储的
-段名/键名大小写，只用**两者非 null** 的名称调用 Clear，再复查键已不存在。
-缺失项在调用前跳过；绝不以 null key 表达删除，也不手工摘链绕过原生索引/缓存维护。
-
-本地测试覆盖重复命令、大小写、不存在项、正文先于子 include、相对/游戏/MIX 查找、
-跨根或 include 错误零删除、语法拒绝、循环及深度/资源边界、set 写入保留。
-适配器测试编译实际 `RulesRemoval.cpp`，以模拟文件/引擎接口验证调用流程和删除后检查；
-它不能证明真实游戏 ABI 或 Ares/Phobos 共存行为。运行方法见 [tests/README.md](./tests/README.md)。
-本机没有 MSVC，CI 已加入 Win32 测试及 DLL 构建；本轮未运行真实游戏。
-后续应完整重启目标游戏，用日志与 Dump 核验显式键缺失；默认值是否仍生效不属于删除失败。
-
-相关文档：[INJECT_INI.md](./INJECT_INI.md)、
-[INJECT_HOOK_ANALYSIS.md](./INJECT_HOOK_ANALYSIS.md)。
+修改后完整重启游戏，分别测试先删后设、先设后删、include 覆盖顺序和错误输入时
+整目标零修改。Runtime/UI 不消费此命令，仍按基线恢复，见 [RUNTIME_INI.md](./RUNTIME_INI.md)。

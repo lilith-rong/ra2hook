@@ -1,9 +1,9 @@
-#include "IniRemoval.h"
+#include "IniPatch.h"
 
 #include <string_view>
 #include <utility>
 
-namespace IniRemoval {
+namespace IniPatch {
 namespace {
     char Fold(char c)
     {
@@ -82,15 +82,26 @@ namespace {
         return false;
     }
 
-    struct Include {
-        std::string path;
-        std::size_t line;
-    };
+    // Ordinary INI names retain the overlay's broad vocabulary (e.g. $Inherits
+    // and names containing spaces). Deletion uses the stricter exact-identifier
+    // check above, and is checked per operation rather than per section header.
+    bool IsIniName(std::string_view text)
+    {
+        if (text.empty() || text.size() >= kMaxToken) return false;
+        for (const unsigned char c : text) {
+            if (c < 0x20 || c == 0x7F || c == '[' || c == ']' || c == '=')
+                return false;
+        }
+        return true;
+    }
 
     class Builder {
     public:
-        Builder(Reader reader, void* context, Error& error)
-            : reader_(reader), context_(context), error_(error) {}
+        Builder(Reader reader, void* context, Error& error, bool allowRemoval)
+            : reader_(reader), context_(context), error_(error)
+        {
+            plan.allowRemoval = allowRemoval;
+        }
 
         Plan plan;
 
@@ -123,13 +134,9 @@ namespace {
             ++plan.files;
             stack_.push_back(identity);
 
-            std::vector<Include> includes;
-            if (!Parse(source, includes)) return false;
-            // Body first, then depth-first includes in source order, matching
-            // set's ordering but never passing commands through WriteString.
-            for (const auto& include : includes) {
-                if (!Load(include.path, source.path, include.line)) return false;
-            }
+            // Parse recursively at the include line, not after this file's
+            // body. Each Parse call owns its section state and resumes on return.
+            if (!Parse(source)) return false;
             stack_.pop_back();
             return true;
         }
@@ -147,8 +154,9 @@ namespace {
             return false;
         }
 
-        bool Parse(const Source& source, std::vector<Include>& includes)
+        bool Parse(const Source& source)
         {
+            std::size_t includes = 0;
             std::string_view text(source.text);
             if (text.substr(0, 2) == "\xFF\xFE" || text.substr(0, 2) == "\xFE\xFF")
                 return Fail(source.path, 1, "UTF-16 is not supported; use UTF-8 or ANSI");
@@ -167,7 +175,7 @@ namespace {
                         text.remove_prefix(1);
                 }
                 if (raw.find('\0') != std::string_view::npos)
-                    return Fail(source.path, line, "NUL byte in manifest");
+                    return Fail(source.path, line, "NUL byte in patch");
                 const auto body = Trim(raw);
                 if (body.empty() || IsComment(body)) continue;
 
@@ -179,17 +187,15 @@ namespace {
                     if (!suffix.empty() && !IsComment(suffix))
                         return Fail(source.path, line, "unexpected text after section header");
                     section = std::string(Trim(body.substr(1, close - 1)));
-                    if (!EqualName(section, "#include") && !IsIdentifier(section))
-                        return Fail(source.path, line, "invalid or wildcard section name");
-                    if (IsRegistry(section))
-                        return Fail(source.path, line, "registry sections cannot be removed: " + section);
+                    if (!IsIniName(section))
+                        return Fail(source.path, line, "invalid section name");
                     continue;
                 }
                 if (section.empty())
                     return Fail(source.path, line, "command outside a section");
                 const auto equal = body.find('=');
                 if (equal == std::string_view::npos)
-                    return Fail(source.path, line, "expected -=property or an include assignment");
+                    return Fail(source.path, line, "expected key=value, +=value, -=property or include");
                 const auto operation = Trim(body.substr(0, equal));
                 auto value = Trim(body.substr(equal + 1));
                 if (EqualName(section, "#include")) {
@@ -212,18 +218,43 @@ namespace {
                         if (c < 0x20 || c == 0x7F)
                             return Fail(source.path, line, "control character in include path");
                     }
-                    if (includes.size() >= kMaxFiles)
+                    if (++includes > kMaxFiles)
                         return Fail(source.path, line, "include entry limit exceeded");
-                    includes.push_back({ std::string(value), line });
+                    if (!Load(std::string(value), source.path, line)) return false;
                 } else {
-                    if (operation != "-")
-                        return Fail(source.path, line, "only -=property is allowed in a target section");
-                    value = WithoutComment(value);
-                    if (!IsIdentifier(value))
-                        return Fail(source.path, line, "expected one exact, nonempty property name");
+                    Command command;
+                    command.section = section;
+                    command.file = source.path;
+                    command.line = line;
+                    if (operation == "-") {
+                        if (!plan.allowRemoval)
+                            return Fail(source.path, line, "-= is only supported in inject/rules");
+                        value = WithoutComment(value);
+                        if (!IsIdentifier(section) || !IsIdentifier(value))
+                            return Fail(source.path, line, "expected one exact, nonempty property and section name");
+                        if (IsRegistry(section))
+                            return Fail(source.path, line, "registry sections cannot be removed: " + section);
+                        command.operation = Operation::Remove;
+                        command.key = std::string(value);
+                    } else if (operation == "+") {
+                        value = WithoutComment(value);
+                        if (value.empty())
+                            return Fail(source.path, line, "empty += append value");
+                        command.operation = Operation::Append;
+                        command.value = std::string(value);
+                    } else {
+                        if (!IsIniName(operation))
+                            return Fail(source.path, line, "invalid property name");
+                        command.operation = Operation::Set;
+                        command.key = std::string(operation);
+                        // Match the previous ordinary overlay assignment:
+                        // trim edges, but preserve empty values, quotes, '='
+                        // and inline text rather than reinterpreting values.
+                        command.value = std::string(value);
+                    }
                     if (plan.commands.size() >= kMaxCommands)
-                        return Fail(source.path, line, "delete command limit exceeded");
-                    plan.commands.push_back({ section, std::string(value), source.path, line });
+                        return Fail(source.path, line, "patch command limit exceeded");
+                    plan.commands.push_back(std::move(command));
                 }
             }
             return true;
@@ -275,8 +306,14 @@ std::string NormalizePath(const std::string& path)
     return prefix;
 }
 
+bool IsRemovalTarget(const std::string& section, const std::string& key)
+{
+    return IsIdentifier(section) && IsIdentifier(key) &&
+           !EqualName(section, "#include") && !IsRegistry(section);
+}
+
 bool BuildPlan(const std::vector<std::string>& roots, Reader reader,
-               void* context, Plan& output, Error& error)
+               void* context, Plan& output, Error& error, bool allowRemoval)
 {
     output = {};
     error = {};
@@ -284,11 +321,11 @@ bool BuildPlan(const std::vector<std::string>& roots, Reader reader,
         error.message = "invalid reader or too many root files";
         return false;
     }
-    Builder builder(reader, context, error);
+    Builder builder(reader, context, error, allowRemoval);
     for (const auto& root : roots) {
         if (!builder.Load(root, {}, 0)) return false;
     }
     output = std::move(builder.plan);
     return true;
 }
-} // namespace IniRemoval
+} // namespace IniPatch

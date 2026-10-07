@@ -4,11 +4,9 @@
 
 ## 注入（inject）
 
-- [x] 既有注入按六目标拆分子目录；新路径约定为
-      `ra2hook/inject/set/<rules|ra2md|art|ai|uimd|sound>/*.ini`，迁移实现见下节。
-- [x] 每个目标目录支持多个 INI：按文件名排序，后写覆盖前写；目标只由目录决定。
-- [x] set 文件内独立展开 `[#include]`：新路径为 `set/<target>/index.ini`
-      控制加载散装或 mix 内的规则 ini，不写入/干扰 Ares/Phobos 原 include 链。
+- [x] 既有注入按六目标拆分：`ra2hook/inject/<rules|ra2md|art|ai|uimd|sound>/*.ini`。
+- [x] 每个目标根文件按文件名排序，普通赋值/追加/删除按行交错执行，后出现者优先。
+- [x] `[#include]` 在出现行原地展开子文件，然后继续父文件，不写入/干扰扩展原链。
 - [x] 私有 include 解析已绕过 `CCINIClass::ReadCCFile`，避免 Ares 自动展开造成重复或顺序不确定。
 - [x] rules 私有覆盖在 `0x679A1B` 合并后，仅对变化的原生类型列表补跑注册；
       `WeaponTypes`/`Projectiles` 逐项 `FindOrAllocate`；现有规则中的单数
@@ -30,10 +28,10 @@
       sub_674650 读取 0x53533d 之前注入）。
 - [x] **sound 两阶段注入已实现** — `0x52C796`（relative call）、`0x52C78F`
       （ESP-relative lea）和 `0x7510D0`（修改 ESP）均已被实机崩溃否决。改用
-      **0x52C6C4** 在打开 SOUNDMD 前加载配置/MIX/INI 到持久覆盖层，再在
-      **0x7510F6** 通过 `ECX` 取得 SOUNDMD 对象并只做内存复制。空目录二进制探针
-      已运行 60 秒；正式源码构建和实际声音键仍待验证。
-- [ ] 实测：往 `set/art、set/ai、set/uimd、set/sound` 放入测试 ini，
+      **0x52C6C4** 在打开 SOUNDMD 前加载配置/MIX/补丁计划，再在
+      **0x7510F6** 通过 `ECX` 取得 SOUNDMD 对象并仅执行内存命令。历史空目录探针
+      已运行 60 秒；当前有序计划的正式构建和实际声音键仍待验证。
+- [ ] 实测：往 `inject/art、inject/ai、inject/uimd、inject/sound` 放入测试 ini，
       确认游戏内真实生效，并分别验证 Ares/Phobos 的同名配置不会被错误覆盖
       （当前注入目录仅空 .gitkeep）。
 - [ ] sound 专项实测：空目录、`[Defaults]` 覆盖、新 `[SoundList]` 条目、多个入口
@@ -42,36 +40,27 @@
 - [ ] 实测：确认 `0x668EF5` 汇总为 `missing=0, untracked=0`，并实际生产新增
       Infantry/Vehicle/Building；新增 Weapon/Projectile 还必须完成一次真实开火。
 
-## set/remove（已实现，完整 Win32 构建/实机待验证）
+## 统一有序启动补丁（代码已实现，CI/实机待验证）
 
-源码、目录、测试和打包配置已更新，不创建生效删除文件。
-历史 rules/art 实机结果不代表 remove 验收。
+- [x] 新目标目录直接位于 inject 下，旧 enabled/set/remove 不加载并提示迁移。
+- [x] IniPatch 规划每一行 set/append/remove，include 原地展开，重复指令不折叠。
+- [x] StartupPatch 按顺序执行：先删后设保留后值，先设后删使显式键消失。
+- [x] 每目标所有根/include 校验成功前零变更；失败不保留该目标的部分 set。
+      原生执行失败停止但不保证回滚，其他目标独立处理。
+- [x] 只有 rules 支持 -=；列表段可写入/追加但不可删除成员；不注销单位、删除整段或
+      改默认值。原生 Clear 用存储大小写、非 null 段/键名，调用前后精确核验。
+- [x] sound 保持既有两 Hook 安全边界，早期预读计划、后期仅内存执行。
+- [x] Runtime 仍用 IniOverlay，不消费 -=，既有基线恢复与解析策略不变。
+- [x] 重写规划器 16 组、模拟适配器 12 组测试，覆盖混合顺序、include/根顺序、
+      失败零修改、追加身份、存储大小写、资源边界、source-free sound 应用和原生失败。
+- [x] CI 接入新测试源，打包六目标+mix 空目录和 INJECT_INI.md/REMOVE_INI.md。
+- [x] 成品 ra2hook.ini 所有功能/子项/自动应用默认 no、日志 Level=0；Actions 校验打包后的安全默认值。
+- [ ] 运行 GitHub Actions 测试及完整 Win32 DLL 构建（本轮未本地编译或运行测试）。
+- [ ] 游戏完整重启验证混合顺序、include 覆盖、坏输入零修改，以及真实单位/武器功能。
 
-- [x] 记录目录迁移与严格删除约定，详见 `REMOVE_INI.md`。
-- [x] 目标 MD5 `56d582a1d6f3c144d3adc867d7a4d91b` 静态反汇编确认
-      `Clear @0x5257C0`：清理 `+0x4/+0x8` 缓存；null section 全重置，null key
-      整段删除；两者非 null 才经 `EntryIndex` 删除及 entry 虚析构。这不是游戏测试。
-- [x] 将六个既有目标的代码路径从 `inject/enabled` 改为 `inject/set`，不自动加载旧目录；
-      用户手动移动/改名 enabled 为 set。`[Inject] Enabled` 名称保留并控制两阶段，
-      `Mix` 不变。
-- [x] 仅 `inject/remove/rules/*.ini`：全部主 set rules/ra2md/art 和私有 include 后、
-      `RegisterInjectedTypes` / `ReloadInjectedGlobalRules` / 原生类型读取前删除显式键。
-- [x] 独立严格命令解析器保留重复 `-=Key`；正文先于 include，子路径先当前文件再
-      游戏/MIX；include 接受 `+=path` 和普通命名/编号 `key=path`，禁止 `-`。
-- [x] 所有根文件及 include 全层读取/解析成功前零删除；缺失子文件、坏语法（正文
-      `+=`、`Foo=no`、空 `-=` 等）、循环、深度 >32 或资源超限拒绝整个删除层，
-      保留 set；缺失目录无操作。片段放入口目录外，避免重复根扫描。
-- [x] 适配器用链表精确预查找、存储大小写和非 null 段/键名调用 Clear，再复查缺失；
-      不存在跳过、重复无害。拒绝通配符、整段删除和注册表/列表段，不注销类型；
-      不写 no/空值、不恢复旧层值、不修改默认值或已缓存 TypeClass。
-- [x] 20 组解析器和 7 组生产适配器模拟测试通过，覆盖重复命令、大小写、缺失项、
-      include 顺序/查找、跨根原子校验、set 保留、拒绝语法、循环及资源边界；
-      ASan/UBSan 通过，生产解析器和模拟接口下的适配器以禁用异常/RTTI 选项编译通过。
-- [x] IDA 再次核对当前 gamemd.exe MD5/SHA-256 和 Clear 反编译，确认只走单键分支。
-- [x] CI 加入 Win32 CTest，打包 set/remove 空目录和 REMOVE_INI.md。
-- [ ] 本机无 MSVC，需实际运行 CI 验证新增源码的完整 Win32 DLL 构建。
-- [ ] 目标游戏验证：修改后完整重启，Dump 键缺失仅证明显式删除；实际生产限制、默认
-      处理及 Ares/Phobos 缓存另验，不用静态 Clear 语义或历史实机结果替代。
+历史：旧独立删除实现曾通过 20+7 组测试和 ASan/UBSan；目标 MD5 对应 Clear 分支也已
+由 IDA 核实。这些证据不能代替当前有序实现的 CI、ABI 和 Ares/Phobos 游戏验证。
+迁移时须同时复核路径、include 顺序及删除不再最终优先的变化。
 
 ## dump
 

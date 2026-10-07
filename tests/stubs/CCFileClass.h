@@ -1,6 +1,6 @@
 #pragma once
 
-#include "IniRemoval.h"
+#include "IniPatch.h"
 
 #include <algorithm>
 #include <cstring>
@@ -23,7 +23,7 @@ namespace FakeFiles {
     inline std::size_t closes = 0;
     inline std::string Identity(const std::string& path)
     {
-        auto result = IniRemoval::NormalizePath(path);
+        auto result = IniPatch::NormalizePath(path);
         for (char& c : result) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
         return result;
     }

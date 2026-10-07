@@ -30,15 +30,14 @@ namespace Config {
     struct InjectSettings {
         bool enabled = false;
 
-        // 此总开关同时控制 set 写入和 remove 删除。
-        // 写入目标由 set 下的子目录决定（旧 enabled 目录需重命名）：
-        //   ra2hook/inject/set/rules/*.ini   -> INI_Rules
-        //   ra2hook/inject/set/ra2md/*.ini   -> INI_RA2MD
-        //   ra2hook/inject/set/art|ai|uimd   -> 各目标对象
-        //   ra2hook/inject/set/sound/*.ini  -> SOUNDMD 两阶段覆盖
-        // 每个目录内按文件名（不区分大小写）排序，后写覆盖前写。
-        //   ra2hook/inject/remove/rules/*.ini -> -=属性名 删除清单
-        // 全部主 set 完成后，remove 整层校验成功才删除显式键；不改默认值。
+        // 启动目标由 inject 下的目录决定；旧 enabled/set/remove 不再加载。
+        //   ra2hook/inject/rules/*.ini  -> INI_Rules（支持 -= 显式删键）
+        //   ra2hook/inject/ra2md/*.ini  -> INI_RA2MD
+        //   ra2hook/inject/art|ai|uimd  -> 各目标对象
+        //   ra2hook/inject/sound/*.ini -> SOUNDMD 两阶段计划/执行
+        // 文件名不区分大小写排序，文件内逐行执行；include 在出现处展开。
+        // 普通赋值、+= 追加、-= 删除交错执行，后出现者优先。
+        // 每个目标全部根文件/include 校验成功后才修改该对象；不改默认值。
 
         // 是否把 ra2hook/inject/mix/*.mix 全部注册进引擎文件系统。
         // mix 内可放自定义 SHP/VXL/PCX —— 这类资源只被惰性引用，注入时机宽松。

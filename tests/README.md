@@ -1,70 +1,67 @@
-# Portable removal tests
+# Ordered startup patch tests
 
-These dependency-free C++20 tests compile the production parser and adapter
-against in-memory input and small fake engine/file APIs. They require neither
-the game nor YRpp, disk fixtures, network access, or a test framework. Parser
-tests use a Reader that deliberately does not canonicalize returned paths.
+The C++20 tests compile the production `IniPatch.cpp` planner and
+`StartupPatch.cpp` adapter. No game, YRpp checkout, disk fixtures, network,
+external test framework or new software installation is required.
 
-## CMake / CTest (Linux or Windows MSVC)
+**This revision was not compiled or executed locally.** Per project workflow,
+GitHub Actions builds/runs these tests before the Win32 DLL build. The previous
+27 removal-only test groups were for the old two-layer implementation and do
+not establish correctness of this ordered version.
 
-From the repository root, with a C++20 compiler and CMake installed:
+## GitHub Actions / optional existing toolchain
 
-```sh
-cmake -S tests -B tests/build -DCMAKE_BUILD_TYPE=Release
-cmake --build tests/build --config Release --parallel
-ctest --test-dir tests/build -C Release --output-on-failure
-```
-
-On Windows, run from a Visual Studio developer shell with the C++ build tools
-installed. CMake can use its default Visual Studio generator; `--config Release`
-and `-C Release` also support multi-configuration generators. No game SDK is
-needed. `CMAKE_BUILD_TYPE` is only relevant to single-configuration generators.
-
-## Direct GCC build (Linux)
+CI performs:
 
 ```sh
-mkdir -p tests/build-gcc
-g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O2 -DNDEBUG \
-    -Isrc src/IniRemoval.cpp tests/IniRemovalTests.cpp \
-    -o tests/build-gcc/ini_removal_tests
-./tests/build-gcc/ini_removal_tests
+cmake -S tests -B patch-tests -A Win32
+cmake --build patch-tests --config Release
+ctest --test-dir patch-tests -C Release --output-on-failure
 ```
 
-All checks remain active with `NDEBUG`. The executable prints a named result for
-each test group, reports mismatched commands/diagnostics or failed conditions,
-and returns a nonzero exit status on any failure. CTest runs the whole executable.
-Generated `tests/build*` directories are ignored locally.
+For someone independently using an already-installed non-Visual-Studio
+C++20 toolchain, omit `-A Win32` and choose a local output directory. No local
+build is needed for submitting this change to Actions.
 
-## Coverage and limits of these tests
+## Coverage
 
-- Repeated commands/sections and caller root order; exact case-insensitive names.
-- Body-first, depth-first, repeated, named, numbered and `+=` includes, with
-  Reader context, relative/fallback lookup, quotes and comment boundaries.
-- UTF-8 BOM, ANSI/GBK bytes, ASCII/fullwidth whitespace/comments and CRLF/CR/LF.
-- Strict body/include/header validation, empty/wildcard/list properties,
-  unclosed quotes, unsupported UTF-16, NUL/control bytes, forbidden registries,
-  read failures and missing files.
-- Canonical dot/dot-dot, slash and case cycles; exact success/failure boundaries
-  for depth, roots, paths, tokens, files, include entries, commands and bytes.
-  Repeated large comment files test the 64 MiB aggregate budget without retaining
-  64 MiB of distinct fixtures.
-- Empty/stale output on every tested failure, including reuse of a previous
-  successful plan, error reset, and recovery after failure.
-- A `std::map` target simulation that applies only after **all** roots/children
-  validate. Invalid later input leaves the target untouched. Successful absent
-  or duplicate deletes do not create entries, remove empty sections, affect
-  unrelated or similarly prefixed keys, assign values, or restore defaults.
+`IniPatchTests.cpp` contains 16 groups covering:
 
-The parser's target simulation does not execute native game code. A second test
-executable compiles production `src/RulesRemoval.cpp` unchanged against
-`tests/stubs/` APIs and checks its real orchestration: scan failure/empty input,
-relative/game/MIX file priority, read failures, parse-before-mutate behavior,
-stored-case names passed to Clear, absence/duplicates, preservation of empty
-sections, post-delete verification and native failure reporting. There are 20
-parser groups and 7 adapter groups; CTest runs both executables.
+- Mixed, repeated set/append/remove instructions in line and caller-root order.
+- Includes expanded at their own line, parent resumption, isolated section state,
+  repeated references, relative/fallback resolution and quoted paths.
+- Exact special `+`/`-` keys; empty assignments, ordinary values and `$Inherits`
+  preserved without implementing extension-specific inheritance.
+- UTF-8 BOM, ANSI/GBK bytes, fullwidth whitespace/comments, CRLF/CR/LF.
+- Malformed syntax, unsafe removal targets, include errors, NUL/UTF-16 rejection,
+  source/line diagnostics, registry writes versus forbidden registry deletion.
+- Removal opt-in (safe default off), empty inputs, stale output clearing,
+  all-roots preflight failures, recovery, path normalization and include cycles.
+- Depth, root count, path/token length, file count, mixed command count,
+  per-file byte and aggregate byte limits (including exact boundaries).
 
-These fakes do not model the game's memory layout or execute its native Clear
-function. The target exe's Clear was separately checked with disassembly/IDA;
-full Win32 DLL compilation and game verification are still required. The test
-harness uses exceptions for diagnostics, but production parser/adapter source
-can also be compiled separately with `-fno-exceptions -fno-rtti`.
+`StartupPatchTests.cpp` contains 12 groups compiling the real adapter against
+`stubs/`, covering:
+
+- Native invocation order, delete then restore, stored-case names for both
+  WriteString and Clear, exact explicit deletion and empty-value behavior.
+- Sorted roots, child overrides followed by parent/later-root overrides.
+- Repeated `+=`, fresh `RA2Hook_N` keys, explicit generated-key collisions,
+  case-insensitive numeric prefixes, namespace exhaustion.
+- No partial writes/appends/deletes on a later root/include validation failure.
+- Rules-only deletion, registry additions, absent-key no-ops and surviving empty
+  sections, no fallback to a cached CurrentSection for absent targets.
+- Source resolution priority, missing/unreadable/short/oversized files, cycles,
+  empty/failed directory scans, null target handling and invalid prepared plans.
+- Sound-style preparation followed by memory-only application after source
+  files become unavailable.
+- Failed native erase/write stops execution without claiming rollback.
+
+The fake engine checks call arguments and visible behavior, not memory layout,
+Ares/Phobos coexistence or actual native game code. Real Win32 DLL compilation
+and full-restart game/Dump checks remain necessary. Runtime still uses the
+unchanged `IniOverlay` algorithm; these tests do not simulate the Runtime UI,
+watcher or game-thread reload machinery.
+
+All assertions remain active in Release/NDEBUG. Logging is disabled in adapter
+tests so the tests do not create game log directories or files.
