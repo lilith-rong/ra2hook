@@ -281,12 +281,20 @@ ra2hook.pdb
 ra2hook/ra2hook-ui.exe
 ra2hook/ra2hook.ini
 ra2hook/REMOVE_INI.md
-ra2hook/inject/set/<target>/
+ra2hook/inject/set/rules/
+ra2hook/inject/set/art/
+ra2hook/inject/set/ra2md/
+ra2hook/inject/set/ai/
+ra2hook/inject/set/uimd/
+ra2hook/inject/set/sound/
 ra2hook/inject/remove/rules/
 ra2hook/inject/mix/
 ```
 
-空目录通过无执行内容的 `.gitkeep` 随包分发，不附带生效的删除清单。
+Actions 在打包阶段直接生成上述目录，不依赖仓库中的空文件夹，也不会把仓库 `inject`
+下的 INI/MIX 内容复制进成品。每个目录仅含一个零字节 `.gitkeep`，防止 artifact ZIP
+忽略空目录；解压后可直接放入自己的文件，无需手动建目录。
+`remove` 当前仅支持 `rules`，因此不创建尚无实现的 `remove/art` 等目录。
 本地测试命令见 [tests/README.md](./tests/README.md)。
 CI 验证编译、自动测试和打包，无法代替真实游戏、Ares、Phobos 与具体 MOD 内容测试。
 

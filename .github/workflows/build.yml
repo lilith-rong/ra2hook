@@ -54,14 +54,44 @@ jobs:
       shell: cmd
 
     - name: Publish runtime UI
-      run: dotnet publish ui/RA2Hook.RuntimeUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o Release/ra2hook
+      run: dotnet publish ui/RA2Hook.RuntimeUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "${{ env.BUILD_CONFIGURATION }}/ra2hook"
 
-    - name: Stage ra2hook configuration and inject directories
+    - name: Stage configuration and empty inject directories
       shell: pwsh
       run: |
-        Copy-Item -LiteralPath ra2hook.ini -Destination Release/ra2hook/ra2hook.ini -Force
-        Copy-Item -LiteralPath inject -Destination Release/ra2hook/inject -Recurse -Force
-        Copy-Item -LiteralPath REMOVE_INI.md -Destination Release/ra2hook/REMOVE_INI.md -Force
+        $packageRoot = Join-Path $env:BUILD_CONFIGURATION 'ra2hook'
+        New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+        Copy-Item -LiteralPath ra2hook.ini -Destination (Join-Path $packageRoot 'ra2hook.ini') -Force
+        Copy-Item -LiteralPath REMOVE_INI.md -Destination (Join-Path $packageRoot 'REMOVE_INI.md') -Force
+
+        # Generate the supported layout, never copy the repository's user INIs/MIXes.
+        # Only remove generated staging content, not the source inject directory.
+        $injectRoot = Join-Path $packageRoot 'inject'
+        if (Test-Path -LiteralPath $injectRoot) {
+          Remove-Item -LiteralPath $injectRoot -Recurse -Force
+        }
+        $directories = @(
+          'set/rules'
+          'set/art'
+          'set/ra2md'
+          'set/ai'
+          'set/uimd'
+          'set/sound'
+          'remove/rules'
+          'mix'
+        )
+        foreach ($relative in $directories) {
+          $directory = Join-Path $injectRoot $relative
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          # upload-artifact skips truly empty directories. A zero-byte marker
+          # preserves each directory in the downloaded ZIP without active rules.
+          New-Item -ItemType File -Path (Join-Path $directory '.gitkeep') -Force | Out-Null
+        }
+        $unexpectedFiles = @(Get-ChildItem -LiteralPath $injectRoot -File -Recurse -Force |
+          Where-Object { $_.Name -ne '.gitkeep' -or $_.Length -ne 0 })
+        if ($unexpectedFiles.Count -ne 0) {
+          throw 'The packaged inject tree must contain only empty .gitkeep files.'
+        }
 
     - name: Upload artifact
       if: ${{ success() }}
@@ -73,5 +103,5 @@ jobs:
           ${{ env.BUILD_CONFIGURATION }}/ra2hook.pdb
           ${{ env.BUILD_CONFIGURATION }}/ra2hook/**
         if-no-files-found: error
-        # Keep the inert .gitkeep files so empty set/remove directories ship.
+        # Keep generated markers so every supported set/remove directory ships.
         include-hidden-files: true
