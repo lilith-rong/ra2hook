@@ -4,9 +4,10 @@
 
 ## 注入（inject）
 
-- [x] 注入目录按目标拆分子目录：`ra2hook/inject/enabled/<rules|ra2md|art|ai|uimd|sound>/*.ini`
+- [x] 既有注入按六目标拆分子目录；新路径约定为
+      `ra2hook/inject/set/<rules|ra2md|art|ai|uimd|sound>/*.ini`，迁移实现见下节。
 - [x] 每个目标目录支持多个 INI：按文件名排序，后写覆盖前写；目标只由目录决定。
-- [x] inject 文件内独立展开 `[#include]`：可用 `enabled/<target>/index.ini`
+- [x] set 文件内独立展开 `[#include]`：新路径为 `set/<target>/index.ini`
       控制加载散装或 mix 内的规则 ini，不写入/干扰 Ares/Phobos 原 include 链。
 - [x] 私有 include 解析已绕过 `CCINIClass::ReadCCFile`，避免 Ares 自动展开造成重复或顺序不确定。
 - [x] rules 私有覆盖在 `0x679A1B` 合并后，仅对变化的原生类型列表补跑注册；
@@ -32,7 +33,7 @@
       **0x52C6C4** 在打开 SOUNDMD 前加载配置/MIX/INI 到持久覆盖层，再在
       **0x7510F6** 通过 `ECX` 取得 SOUNDMD 对象并只做内存复制。空目录二进制探针
       已运行 60 秒；正式源码构建和实际声音键仍待验证。
-- [ ] 实测：往 `enabled/art、enabled/ai、enabled/uimd、enabled/sound` 放入测试 ini，
+- [ ] 实测：往 `set/art、set/ai、set/uimd、set/sound` 放入测试 ini，
       确认游戏内真实生效，并分别验证 Ares/Phobos 的同名配置不会被错误覆盖
       （当前注入目录仅空 .gitkeep）。
 - [ ] sound 专项实测：空目录、`[Defaults]` 覆盖、新 `[SoundList]` 条目、多个入口
@@ -40,6 +41,37 @@
 - [ ] 实测：Ares/Phobos 共存时确认 `0x679A1B` 能到达，且私有 include 只展开一次。
 - [ ] 实测：确认 `0x668EF5` 汇总为 `missing=0, untracked=0`，并实际生产新增
       Infantry/Vehicle/Building；新增 Weapon/Projectile 还必须完成一次真实开火。
+
+## set/remove（已实现，完整 Win32 构建/实机待验证）
+
+源码、目录、测试和打包配置已更新，不创建生效删除文件。
+历史 rules/art 实机结果不代表 remove 验收。
+
+- [x] 记录目录迁移与严格删除约定，详见 `REMOVE_INI.md`。
+- [x] 目标 MD5 `56d582a1d6f3c144d3adc867d7a4d91b` 静态反汇编确认
+      `Clear @0x5257C0`：清理 `+0x4/+0x8` 缓存；null section 全重置，null key
+      整段删除；两者非 null 才经 `EntryIndex` 删除及 entry 虚析构。这不是游戏测试。
+- [x] 将六个既有目标的代码路径从 `inject/enabled` 改为 `inject/set`，不自动加载旧目录；
+      用户手动移动/改名 enabled 为 set。`[Inject] Enabled` 名称保留并控制两阶段，
+      `Mix` 不变。
+- [x] 仅 `inject/remove/rules/*.ini`：全部主 set rules/ra2md/art 和私有 include 后、
+      `RegisterInjectedTypes` / `ReloadInjectedGlobalRules` / 原生类型读取前删除显式键。
+- [x] 独立严格命令解析器保留重复 `-=Key`；正文先于 include，子路径先当前文件再
+      游戏/MIX；include 接受 `+=path` 和普通命名/编号 `key=path`，禁止 `-`。
+- [x] 所有根文件及 include 全层读取/解析成功前零删除；缺失子文件、坏语法（正文
+      `+=`、`Foo=no`、空 `-=` 等）、循环、深度 >32 或资源超限拒绝整个删除层，
+      保留 set；缺失目录无操作。片段放入口目录外，避免重复根扫描。
+- [x] 适配器用链表精确预查找、存储大小写和非 null 段/键名调用 Clear，再复查缺失；
+      不存在跳过、重复无害。拒绝通配符、整段删除和注册表/列表段，不注销类型；
+      不写 no/空值、不恢复旧层值、不修改默认值或已缓存 TypeClass。
+- [x] 20 组解析器和 7 组生产适配器模拟测试通过，覆盖重复命令、大小写、缺失项、
+      include 顺序/查找、跨根原子校验、set 保留、拒绝语法、循环及资源边界；
+      ASan/UBSan 通过，生产解析器和模拟接口下的适配器以禁用异常/RTTI 选项编译通过。
+- [x] IDA 再次核对当前 gamemd.exe MD5/SHA-256 和 Clear 反编译，确认只走单键分支。
+- [x] CI 加入 Win32 CTest，打包 set/remove 空目录和 REMOVE_INI.md。
+- [ ] 本机无 MSVC，需实际运行 CI 验证新增源码的完整 Win32 DLL 构建。
+- [ ] 目标游戏验证：修改后完整重启，Dump 键缺失仅证明显式删除；实际生产限制、默认
+      处理及 Ares/Phobos 缓存另验，不用静态 Clear 语义或历史实机结果替代。
 
 ## dump
 

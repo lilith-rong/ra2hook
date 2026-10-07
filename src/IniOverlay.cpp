@@ -449,6 +449,11 @@ namespace {
                                           path, lineNumber);
                             Log::Warn("%s: ignored invalid key %s:%d",
                                       Tag(ctx.logTag), path, lineNumber);
+                        } else if (_stricmp(key, "-") == 0 && !IsIncludeSection(section)) {
+                            RecordError(ctx.stats, "%s:%d -= is only valid in remove/rules", path, lineNumber);
+                            Log::Warn("%s: deletion command outside remove/rules %s:%d",
+                                      Tag(ctx.logTag), path, lineNumber);
+                            valid = false;
                         } else {
                             const bool append = IsAppendMarker(key) &&
                                                  !IsIncludeSection(section);
@@ -660,7 +665,7 @@ int ScanDirectory(const char* dir, const char* wildcard,
     HANDLE find = FindFirstFileA(pattern, &data);
     if (find == INVALID_HANDLE_VALUE) {
         const DWORD error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND) return 0;
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return 0;
         Log::Warn("ini: cannot scan %s (error %lu)", pattern, error);
         return -1;
     }
@@ -674,11 +679,22 @@ int ScanDirectory(const char* dir, const char* wildcard,
                 continue;
         }
         if (count < kMaxFiles) {
-            std::snprintf(files[count], kPathMax, "%s\\%s", dir, data.cFileName);
+            const int pathLength = std::snprintf(files[count], kPathMax,
+                                                 "%s\\%s", dir, data.cFileName);
+            if (pathLength <= 0 || pathLength >= kPathMax) {
+                FindClose(find);
+                Log::Warn("ini: matched path is too long: %s\\%s", dir, data.cFileName);
+                return -1;
+            }
         }
         ++count;
     } while (FindNextFileA(find, &data));
+    const DWORD enumerationError = GetLastError();
     FindClose(find);
+    if (enumerationError != ERROR_NO_MORE_FILES) {
+        Log::Warn("ini: incomplete scan of %s (error %lu)", dir, enumerationError);
+        return -1;
+    }
 
     if (count > kMaxFiles) {
         Log::Warn("ini: directory %s has %d files; refusing limit %d truncation",

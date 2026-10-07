@@ -1,8 +1,9 @@
 # Runtime INI hot reload
 
 This document records the implementation and test boundary of ra2hook's
-single-player runtime INI system. Startup injection remains documented in
-`INJECT_HOOK_ANALYSIS.md`; runtime reload is a separate pipeline.
+single-player runtime INI system. Startup set injection is documented in
+[INJECT_INI.md](./INJECT_INI.md), with the strict remove layer in
+[REMOVE_INI.md](./REMOVE_INI.md); runtime reload is a separate pipeline.
 
 ## 1. Current status
 
@@ -49,6 +50,33 @@ Worker threads never parse engine objects and never write game memory. All
 Every reload rebuilds the complete desired state from the directory. Removing a
 key or file therefore rolls that value back instead of layering patches forever.
 A syntax/read/include failure leaves the last valid applied state untouched.
+
+### Startup remove is not runtime rollback
+
+The startup pipeline renames all `inject/enabled/<target>` paths to
+`inject/set/<target>`; move/rename the old directory manually, as it will not be
+loaded automatically. `[Inject] Enabled` keeps its name and controls both set
+and remove; `Mix` and `inject/mix` are unchanged. Local parser and mock-adapter
+tests pass; full Win32 build and game validation remain pending.
+
+Only `inject/remove/rules/*.ini` is supported initially. After all main set
+rules/ra2md/art and their private includes, but before `RegisterInjectedTypes`,
+`ReloadInjectedGlobalRules`, and native type reads, a separate strict command
+parser collects `[UNIT_ID]` / repeated `-=Key` commands. It never parses or
+copies them as ordinary game INI. Every root/include must read and parse
+successfully before any removal; any failure rejects the whole remove layer
+while retaining earlier set writes. A missing remove directory is a no-op.
+
+Startup remove deletes explicit entries from `INI_Rules`, not by writing `no`
+or empty values. It does not restore earlier-layer values, modify reader
+defaults, or change cached TypeClass data. Registry/list sections, wildcards,
+and whole-section deletion are rejected; it cannot unregister units. Dump key
+absence proves only explicit deletion, not gameplay restrictions or defaults.
+
+The runtime watcher/UI does **not** consume remove commands or hot-reload
+set/remove folders. Restart the game after editing either startup layer.
+Runtime key/file removal still means restoring the captured baseline, not
+executing startup deletion or reconstructing values removed before that baseline.
 
 ## 3. Tick hook
 
@@ -98,11 +126,14 @@ restart. The UI can pause/resume `AutoApply` for the current process.
 
 Files in `Directory` are merged by case-insensitive filename order. The shared
 `IniOverlay` parser supports the same private `[#include]` behavior as startup
-inject: current body first, then include entries in source order (including
+set: current body first, then include entries in source order (including
 repeated `+=file.ini` keys), later values
 winning. Include cycles, missing files, malformed lines, and depth over 32 reject
-the reload transaction. Startup inject also stages each source file before copying
-it to an engine INI, so a failed include tree cannot leave a half-merged file.
+the reload transaction. Startup set also stages each source file before copying
+it to an engine INI, but its recoverable missing-include behavior is distinct
+from runtime strict validation. The startup remove layer validates all roots
+and includes before any deletion; its command syntax is not part of `IniOverlay`
+or the runtime patch format.
 
 The UI lists active `name.ini` and inactive `name.ini.disabled` files. Its
 checkbox enables or disables a patch by changing only this suffix, and the name

@@ -27,6 +27,8 @@
     <ClCompile Include="$(ThisDir)\src\DumpIni.cpp" />
     <ClCompile Include="$(ThisDir)\src\ArtMap.cpp" />
     <ClCompile Include="$(ThisDir)\src\IniOverlay.cpp" />
+    <ClCompile Include="$(ThisDir)\src\IniRemoval.cpp" />
+    <ClCompile Include="$(ThisDir)\src\RulesRemoval.cpp" />
     <ClCompile Include="$(ThisDir)\src\Runtime.cpp" />
     <ClCompile Include="$(ThisDir)\src\RuntimeWatcher.cpp" />
     <ClCompile Include="$(ThisDir)\src\RuntimeProtocol.cpp" />
@@ -43,6 +45,8 @@
     <ClInclude Include="$(ThisDir)\src\DumpIni.h" />
     <ClInclude Include="$(ThisDir)\src\ArtMap.h" />
     <ClInclude Include="$(ThisDir)\src\IniOverlay.h" />
+    <ClInclude Include="$(ThisDir)\src\IniRemoval.h" />
+    <ClInclude Include="$(ThisDir)\src\RulesRemoval.h" />
     <ClInclude Include="$(ThisDir)\src\Runtime.h" />
     <ClInclude Include="$(ThisDir)\src\RuntimeWatcher.h" />
     <ClInclude Include="$(ThisDir)\src\RuntimeProtocol.h" />

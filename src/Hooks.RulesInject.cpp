@@ -13,7 +13,7 @@
 //
 // 【本轮实现】多目标注入：
 //   每个引擎 INI 对象（rules/ra2md/art/ai/uimd/sound）对应一个注入目录：
-//     ra2hook/inject/enabled/<target>/*.ini
+//     ra2hook/inject/set/<target>/*.ini
 //   目标表见 kTargets。装载时机均已核实（IDA，gamemd.exe 0x400000）：
 //     - rules  挂点 0x679A1B：在 0x679A15 的 Ares/Phobos 处理之后、类型读取之前
 //     - ra2md  与 rules 同一窗口（引擎先读 ra2md.ini 再读 rulesmd.ini）
@@ -24,13 +24,15 @@
 //     - uimd   UIMD.INI 于 sub_534FA0 0x535311 读进 INI_UIMD
 //               → 独立挂点 0x53531A（装载完成后、数据读取 0x53533d 之前）
 //     - sound  使用两个独立挂点。0x52C6C4 在打开 SOUNDMD.INI 前预读配置、注册
-//              MIX，并把 enabled/sound 合并到持久内存对象；0x7510F6 在
+//              MIX，并把 set/sound 合并到持久内存对象；0x7510F6 在
 //              sub_7510D0 内取得 ECX=SOUNDMD 对象，只把预备内容复制进去。
 //              旧 0x52C796（relative call）、0x52C78F（ESP-relative lea）和
 //              0x7510D0（修改 ESP）均已实测会在 SyringeIH 下崩溃，不能使用。
 //   InjectTarget 用「目标对象段数>0」作守卫：若某个对象尚未装载（或装载失败
 //   后段数为 0）则跳过，避免写进无效对象。
-//   注入目标只由 enabled/<target> 目录决定，不存在跨目标的全局文件列表。
+//   注入目标只由 set/<target> 目录决定，不存在跨目标的全局文件列表。
+//   主钩子完成 set 后，独立解析 remove/rules 的 -=属性名 清单并删除显式键；
+//   整层校验失败不执行任何删除，不修改默认值或已解析类型字段。
 //   inject 文件内的 [#include] 由 ra2hook 自己展开，独立于 Ares/Phobos：
 //     - 不修改原 rules/art 的 [#include] 段
 //     - 不把 inject 文件自己的 [#include] 段写入引擎目标对象
@@ -73,6 +75,8 @@
 
 #include "Config.h"
 #include "IniOverlay.h"
+#include "RulesRemoval.h"
+#include "GamePaths.h"
 #include "Logger.h"
 
 namespace RulesInject {
@@ -93,7 +97,7 @@ namespace RulesInject {
     // 每个目标 = { 目录名, 引擎对象名（日志）, 取对象指针，是否已挂载 }
     // 注意 INI_Rules 是 CCINIClass*（指针），其余是 CCINIClass（对象，需取址）。
     static struct Target {
-        const char* dir;                // enabled/ 下的子目录
+        const char* dir;                // set/ 下的子目录
         const char* label;              // 日志名
         CCINIClass* (*get)(void);      // 取目标对象
         bool        mapped;             // 已确认的注入时机
@@ -153,10 +157,21 @@ namespace RulesInject {
     static int ScanDir(const char* dir, const char* wildcard,
                        char files[][kPathMax])
     {
-        return IniOverlay::ScanDirectory(dir, wildcard, files);
+        char absolute[kPathMax] = {};
+        if (!GamePaths::Resolve(absolute, sizeof(absolute), dir)) return -1;
+        return IniOverlay::ScanDirectory(absolute, wildcard, files);
     }
 
-    // 对单个目标：扫描 enabled/<dir>，把目标对象注入。
+    static bool SetDirectory(const char* target, char* directory, size_t capacity)
+    {
+        char relative[kPathMax] = {};
+        const int written = std::snprintf(relative, sizeof(relative),
+                                          "%s\\set\\%s", kInjectRoot, target);
+        return written > 0 && written < kPathMax &&
+               GamePaths::Build(directory, capacity, relative);
+    }
+
+    // 对单个目标：扫描 set/<dir>，把目标对象注入。
     // 守卫：目标对象必须已装载（段数>0）才注入，否则写进未装载/未就绪的
     // 对象是无效的（引擎可能在装载时重建/覆盖该对象）。
     // 各目标装载时机：
@@ -166,7 +181,10 @@ namespace RulesInject {
     static int InjectTarget(const Target& t)
     {
         char dir[kPathMax] = {};
-        std::snprintf(dir, sizeof(dir), "%s\\enabled\\%s", kInjectRoot, t.dir);
+        if (!SetDirectory(t.dir, dir, sizeof(dir))) {
+            Log::Warn("inject: 无法确定 set/%s 目录，跳过", t.dir);
+            return 0;
+        }
 
         char found[kMaxFiles][kPathMax] = {};
         const int n = ScanDir(dir, "*.ini", found);
@@ -852,6 +870,11 @@ namespace RulesInject {
         for (int i = 0; i < kReadyAtMain; ++i)
             total += InjectTarget(kTargets[i]);
 
+        // Remove only explicit INI keys after every main set/include has
+        // completed, before registry/global readers and native type loading.
+        // A rejected remove layer leaves all successful set writes intact.
+        RulesRemoval::Apply(pINI);
+
         RegisterInjectedTypes(pINI, beforeLists);
         // Match the native Read_File dependency order: list registries exist
         // before global sections that may resolve references to those types.
@@ -908,7 +931,10 @@ namespace RulesInject {
             InjectMix();
 
         char dir[kPathMax] = {};
-        std::snprintf(dir, sizeof(dir), "%s\\enabled\\sound", kInjectRoot);
+        if (!SetDirectory("sound", dir, sizeof(dir))) {
+            Log::Warn("inject.sound: 无法确定 set/sound 目录，跳过");
+            return;
+        }
 
         CCINIClass staging;
         IniOverlay::MergeStats stats;

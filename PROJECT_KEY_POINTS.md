@@ -44,6 +44,8 @@ Hook 地址与目标 EXE 强绑定。任何 EXE 变化都必须重新做 IDA 和
 
 ## 3. 独立 include，而不是复用扩展 include
 
+本节描述 set 覆盖解析；remove 使用独立严格命令解析器，不能走普通 INI 合并。
+
 ra2hook 没有把自己的入口文件交给 `CCINIClass::ReadCCFile`。原因是 Ares 可能 Hook
 这个函数并自动展开 `[#include]`，会导致重复处理、顺序不确定和项目间耦合。
 
@@ -54,7 +56,7 @@ ra2hook 没有把自己的入口文件交给 `CCINIClass::ReadCCFile`。原因�
 - 先合并当前文件正文，再按 include 出现顺序递归合并；
 - 后写覆盖前写；
 - 循环 include 和超过 32 层的递归被拒绝；
-- 缺失 include 与可恢复文本问题只记警告，不中断兄弟文件；
+- set 缺失 include 与可恢复文本问题只记警告，不中断兄弟文件；
 - include 段本身不写入目标 INI；
 - `+=` 内部使用 `__RA2HOOK_APPEND_`，输出时使用 `RA2Hook_N`，不与
   Ares/Phobos 的 `var_N` 冲突。
@@ -67,19 +69,45 @@ Ares/Phobos include 链。
 项目早期曾考虑在 `ra2hook.ini` 中使用 `Files=`，但该配置不能表达一个文件究竟属于
 rules、art 还是其他对象，最终被删除。
 
-现在目标完全由目录决定：
+set 目标完全由目录决定：
 
 ```text
-inject/enabled/rules/*.ini
-inject/enabled/art/*.ini
-inject/enabled/ra2md/*.ini
-inject/enabled/ai/*.ini
-inject/enabled/uimd/*.ini
-inject/enabled/sound/*.ini
+inject/set/rules/*.ini
+inject/set/art/*.ini
+inject/set/ra2md/*.ini
+inject/set/ai/*.ini
+inject/set/uimd/*.ini
+inject/set/sound/*.ini
+inject/remove/rules/*.ini   # 首版唯一删除目标：INI_Rules
 ```
+
+旧 `inject/enabled` 必须手动移动/改名为 `inject/set`；新方案不自动加载旧目录。
+`[Inject] Enabled` 名称不变，统一控制 set/remove；`Mix` 与 `inject/mix` 不变。
+两阶段仅在启动时执行，修改后须完整重启游戏。
 
 每个目录支持多个入口文件，按不区分大小写的文件名排序。这个约定简单、可观察，且
 不需要为每一种目标继续扩展总配置格式。
+
+### 4.1 remove 是严格命令层，不是另一层普通 INI
+
+执行时序：全部主 set rules/ra2md/art 及各自私有 include 完成后，执行 remove；
+然后才调用 `RegisterInjectedTypes`、`ReloadInjectedGlobalRules` 和原生类型读取。
+
+- `[UNIT_ID]` 下重复 `-=Prerequisite` 等行按命令列表保留，不能解析/复制为普通 INI；
+- `[#include]` 支持 `+=path` 与普通 `key=path`，不允许 `-`；正文先于子 include，
+  路径先相对当前文件再走游戏/MIX；片段放在入口目录外，避免重复根扫描；
+- 段/键不区分大小写精确匹配；不存在则跳过，重复删除无害；禁止通配符、整段删除及
+  注册表/列表段，不注销类型；
+- 所有根文件和 include 必须全部读入/解析成功后才开始删除。缺失子文件、坏语法、
+  循环、深度超过 32 或资源超限均拒绝整个 remove 层，保留先前 set 写入；
+  remove 目录缺失是合法无操作；
+- 只删除 `INI_Rules` 显式 entry，不写 `no`/空值、不恢复旧层值、不修改默认值或
+  已缓存 TypeClass 数据。Dump 键缺失只证明显式删除，不保证生产限制解除。
+
+原生 `Clear @0x5257C0` 的静态语义已通过目标 EXE 反汇编及 IDA 核实；适配器经链表
+精确预查找、传入存储大小写且非 null 的段/键名，并复查键缺失。27 组本地解析器与
+模拟适配器测试通过；完整 Win32 构建和游戏验证仍待做，不可将历史 set 实机结果算作
+remove 验收。完整约定见 [REMOVE_INI.md](./REMOVE_INI.md)。
 
 ## 5. 写入 INI 不等于新增类型生效
 
@@ -219,7 +247,8 @@ UI    <game>\ra2hook\ra2hook-ui.exe
 
 - 配置缺失时所有高风险功能默认关闭；
 - 日志无法创建时静默放弃日志，不让游戏崩溃；
-- 单个 include 缺失时跳过并继续兄弟项；
+- set 单个 include 缺失时跳过并继续兄弟项；remove 任一读取/解析错误拒绝整个删除层，
+  不撤销已完成的 set 写入；
 - 目标对象尚未装载时跳过该目标；
 - 运行时候选状态无效时保留上一代状态；
 - 高风险运行时键标记为 `RestartRequired`，不尝试强写。
@@ -235,6 +264,7 @@ Dump 使用引擎自己的文件类读取 MIX/加密资源，并从内存 INI �
 - Ares/Phobos include 是否已进入目标对象；
 - ra2hook 覆盖是否最终胜出；
 - 新增定义是否出现在最终快照；
+- remove 的显式目标键是否缺失（不代表默认值、缓存或游戏限制已改变）；
 - 游戏实际引用了哪些 CSF/VXL/HVA/SHP 文件。
 
 因此 Dump 不只是附加导出功能，也是 Hook 时序和注入结果的可观察性手段。
@@ -288,7 +318,9 @@ Dump 使用引擎自己的文件类读取 MIX/加密资源，并从内存 INI �
 7. UI 与 DLL 来自同一 artifact，连接到正确游戏目录；
 8. 运行时测试应用、语法失败保留、删除回滚和离局回滚；
 9. LAN/Internet/Replay 仍拒绝写入；
-10. 日志、配置、补丁和 Dump 仍位于 `<game>\ra2hook`。
+10. 日志、配置、补丁和 Dump 仍位于 `<game>\ra2hook`；
+11. 新 set/remove：迁移后不加载旧 enabled；跨入口/include 任一错误零删除、set 保留；
+12. 分开记录可移植测试、Clear 静态语义和游戏实测，不把其中一项当作另一项的证据。
 
 ## 20. 收尾结论
 
@@ -297,7 +329,8 @@ ra2hook 的关键成果不是单个 Hook，而是一条完整且可验证的链�
 ```text
 正确时机
   -> 独立解析
-  -> 目标对象合并
+  -> set 目标对象合并
+  -> remove 全层校验/显式键删除
   -> 类型补注册/全局段重读
   -> 原生消费
   -> 加载后诊断

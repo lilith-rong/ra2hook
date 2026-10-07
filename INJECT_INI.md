@@ -1,7 +1,9 @@
 # ra2hook INI 注入说明
 
-最后更新：2026-08-13  
-状态：rules/art 私有 INI 注入已通过实机验证，游戏内目标内容可以正常生效。
+最后更新的实机记录：2026-08-13
+
+状态：历史 rules/art 私有 INI 覆盖已通过实机验证。set/remove 已实现并通过本地
+解析器与模拟适配器测试；新版本完整 Win32 构建和实机验证待执行，不沿用历史实机结论。
 
 ## 1. 功能目标
 
@@ -12,7 +14,7 @@ ra2hook 在 Ares/Phobos 完成原有 INI 处理后，再把自己的 INI 覆盖�
 - ra2hook 的 `[#include]` 独立展开，不修改或干扰 Ares/Phobos 原 include 链；
 - 一个目标目录可以有多个入口 INI；
 - include 可以引用散装文件或已注册 MIX 中的 INI；
-- 缺失的 include 文件只产生警告，不中止其他兄弟文件；
+- set 层缺失的 include 文件只产生警告，不中止其他兄弟文件；remove 层则整体拒绝；
 - rules 中新增的单位、建筑、武器、弹体等类型会补注册到引擎数组，而不只是写进
   `CCINIClass` 内存对象。
 
@@ -33,7 +35,7 @@ Hook 范围，不能直接假设兼容。
 
 ## 3. 目录结构
 
-目标 INI 对象由 `enabled` 下的子目录决定，不在 `ra2hook.ini` 中配置文件列表：
+set 目标 INI 对象由 `set` 下的子目录决定，不在 `ra2hook.ini` 中配置文件列表：
 
 ```text
 <game>/
@@ -43,18 +45,24 @@ Hook 范围，不能直接假设兼容。
     |-- ra2hook.ini
     |-- ra2hook.log
     `-- inject/
-        |-- enabled/
+        |-- set/
         |   |-- rules/   -> rulesmd.ini
         |   |-- ra2md/   -> ra2md.ini
         |   |-- art/     -> artmd.ini
         |   |-- ai/      -> aimd.ini
         |   |-- uimd/    -> uimd.ini
         |   `-- sound/   -> soundmd.ini
+        |-- remove/
+        |   `-- rules/   -> 仅 INI_Rules 显式键删除（可选）
         `-- mix/          -> 自动注册目录中的全部 .mix
 ```
 
+迁移：手动将 `inject/enabled` 移动/改名为 `inject/set`，保留 rules、ra2md、art、ai、
+uimd、sound 子目录；新方案不自动加载旧目录，不同时读取两套路径。
+
 每个目标目录都会扫描全部 `*.ini`，入口文件名没有特殊要求。推荐统一命名为
-`index.ini` 或 `include.ini`，避免维护时混淆。
+`index.ini` 或 `include.ini`，避免维护时混淆。remove 首版只支持 `remove/rules`，
+不支持 art/ra2md/ai/uimd/sound 删除；命令语法见 [REMOVE_INI.md](./REMOVE_INI.md)。
 
 ## 4. 配置
 
@@ -69,13 +77,14 @@ Mix=yes
 Level=3
 ```
 
-- `Enabled` 是 INI 注入总开关。
-- `Mix` 控制是否注册 `ra2hook\inject\mix\*.mix`。
+- `Enabled` 名称保留，是 set/remove 两阶段的 INI 注入总开关。
+- `Mix` 和 `ra2hook\inject\mix\*.mix` 不变，仍控制 MIX 注册。
 - 不存在 `Files=` 配置。文件属于哪个目标，只由所在子目录决定。
+- set/remove 都只在启动时执行；编辑文件或修改开关后须完整重启游戏。
 
-## 5. 私有 include 用法
+## 5. set 私有 include 用法
 
-例如 `ra2hook\inject\enabled\rules\index.ini`：
+例如 `ra2hook\inject\set\rules\index.ini`：
 
 ```ini
 [#include]
@@ -104,7 +113,8 @@ Level=3
 
 入口目录中的所有 INI 都会被扫描。如果某个文件既位于入口目录，又被另一个入口
 文件 include，它可能被合并两次。因此推荐入口目录只放少量索引文件，实际规则放在
-其他目录或 MIX 中。
+其他目录或 MIX 中。remove 也应这样放置片段，避免重复入口；重复删除虽幂等，仍会
+重复读取。set 的容错规则不适用于 remove，后者必须全层预校验。
 
 ## 6. 与 Ares/Phobos 的隔离
 
@@ -124,7 +134,12 @@ ra2hook 使用 `CCFileClass` 读取文件原始内容，再由自己的解析器
 主 rules Hook 位于 `0x679A1B`。它在 Ares/Phobos 使用的 `0x679A15` 之后，且在
 原生 `LoadTypesFromINI` 类型定义加载之前。
 
-合并 rules 覆盖层后，ra2hook 只对发生变化的列表补跑原生注册逻辑：
+主 Hook 的新时序为：全部 set rules/ra2md/art 及其私有 include → remove/rules
+全层读取/严格解析成功后删除 → `RegisterInjectedTypes` → `ReloadInjectedGlobalRules`
+→ 原生类型读取。remove 失败只跳过整个删除层，保留 set 写入并继续原有流程。
+
+合并 rules 覆盖层、完成 remove 阶段后，ra2hook 只对发生变化的列表补跑原生注册逻辑；
+remove 拒绝注册表/列表段，不负责注销类型：
 
 ```text
 Countries             OverlayTypes       SuperWeaponTypes
@@ -252,14 +267,19 @@ inject post @0x668EF5: ... missing=0
 - `0x668EF5 missing=0` 证明已跟踪的新 ID 进入了类型数组；
 - 游戏内能够生产单位、使用武器并正常开火，才证明目标功能真正可用。
 
+remove 的 Dump 验证只检查目标键是否不再显式存在。删除不写 `no`/空值，不恢复
+原覆盖层的旧值，不修改默认值或已缓存的 TypeClass 数据；键缺失不等于解除玩法限制。
+remove 的静态 Clear 语义、本地测试和实机待测项另见 `REMOVE_INI.md`，不属于上述历史实机结果。
+
 ## 12. 常见问题
 
 | 现象 | 检查项 |
 |---|---|
 | 没有任何 inject 日志 | `ra2hook\ra2hook.ini` 中 `[Inject] Enabled=yes`；DLL 是否加载；查看 `ra2hook\ra2hook.log` |
-| 某个目录没有内容 | 文件是否位于正确的 `enabled/<target>` 子目录 |
+| 某个目录没有内容 | 文件是否位于正确的 `set/<target>` 子目录；旧 `inject/enabled` 不自动加载 |
 | include 文件未找到 | 相对路径、MIX 是否注册、文件名大小写和拼写 |
-| 一个缺失文件导致担忧 | 缺失项只会被跳过；检查后续兄弟 include 是否仍有 merged 日志 |
+| set 中一个缺失文件导致担忧 | set 缺失项只会被跳过；检查后续兄弟 include 是否仍有 merged 日志 |
+| remove 中任何文件/命令出错 | 整个 remove 层不执行；已完成的 set 写入仍保留 |
 | dump 有定义但单位不存在 | ID 是否加入正确类型列表；检查 `missing`、生产条件和科技条件 |
 | 单位不能生产 | `Owner`、`RequiredHouses`、`ForbiddenHouses`、`Prerequisite`、`TechLevel` |
 | 武器存在但不能开火 | Weapon、Projectile、Warhead 是否都注册；资源名和目标过滤是否正确 |
@@ -276,7 +296,10 @@ inject post @0x668EF5: ... missing=0
 4. 实际生产一个新增 Infantry、Vehicle 或 Building；
 5. 让使用新增 Weapon/Projectile/Warhead 的单位真实开火；
 6. 验证 Ares/Phobos 原 include 和主要功能仍正常；
-7. sound、ai、uimd 有内容时分别做独立测试，不用 rules 成功代替它们的验收。
+7. sound、ai、uimd 有内容时分别做独立测试，不用 rules 成功代替它们的验收；
+8. 新 set/remove 方案先做本地可移植解析/规划测试，确认跨入口失败时零删除、set 保留；
+9. remove 实机测试仍待执行：重启后检查 Dump 中显式键缺失，并单独观察实际玩法，
+   不以静态 Clear 验证或 Dump 代替游戏验收。
 
 更底层的地址分析、反汇编依据和否决过的 Hook 点见
 `INJECT_HOOK_ANALYSIS.md`。

@@ -9,12 +9,16 @@ ra2hook 是面向《红色警戒 2：尤里的复仇》`gamemd.exe` 的 32 位 S
 
 ## 当前状态
 
+`set/remove` 已实现；本地解析器和模拟引擎适配器共 27 组测试通过，并通过
+ASan/UBSan 检查。原生删键函数已由 IDA 核实；新版本完整 Win32 构建和实机验证待执行。
+下列历史实机结果不代表本次改动已实机验证。
+
 截至 2026-08-13：
 
 - GitHub Actions 可以构建 `ra2hook.dll`、PDB 和自包含的运行时 UI；
 - DLL 能够通过 Syringe 加载并与目标游戏版本共同运行；
 - `rules`/`art` 私有 INI 注入已通过实机验证，新增类型和目标规则已在游戏内生效；
-- 启动注入支持多个 INI、递归私有 include、MIX 内 INI 和缺失文件跳过；
+- 启动 set 覆盖支持多个 INI、递归私有 include、MIX 内 INI 和缺失文件跳过；
 - 单机运行时系统、目录监视、事务式应用、回滚、命名管道和 WPF UI 已完成；
 - UI 支持新建、编辑、保存、重命名、启用/停用和删除运行时补丁；
 - INI、CSF、VXL、HVA、SHP 导出功能已实现。
@@ -42,14 +46,19 @@ SHA256: 7CD005D263FDE203D9C84548200A057A8DF61D724DA3C6BD1E521EEB61CD0747
 
 | 目录 | 目标对象 | 状态 |
 |---|---|---|
-| `inject/enabled/rules` | `rulesmd.ini` / `INI_Rules` | 已实机验证 |
-| `inject/enabled/art` | `artmd.ini` / `INI_Art` | 已实机验证 |
-| `inject/enabled/ra2md` | `ra2md.ini` / `INI_RA2MD` | 已接入，有早期缓存限制 |
-| `inject/enabled/ai` | `aimd.ini` / `INI_AI` | 已接入，需专项测试 |
-| `inject/enabled/uimd` | `uimd.ini` / `INI_UIMD` | 已接入，扩展局部对象有限制 |
-| `inject/enabled/sound` | `soundmd.ini` 局部对象 | 两阶段注入，需专项测试 |
+| `inject/set/rules` | `rulesmd.ini` / `INI_Rules` | 旧覆盖机制已实机验证 |
+| `inject/set/art` | `artmd.ini` / `INI_Art` | 旧覆盖机制已实机验证 |
+| `inject/set/ra2md` | `ra2md.ini` / `INI_RA2MD` | 已接入，有早期缓存限制 |
+| `inject/set/ai` | `aimd.ini` / `INI_AI` | 已接入，需专项测试 |
+| `inject/set/uimd` | `uimd.ini` / `INI_UIMD` | 已接入，扩展局部对象有限制 |
+| `inject/set/sound` | `soundmd.ini` 局部对象 | 两阶段注入，需专项测试 |
+| `inject/remove/rules` | 仅删除 `INI_Rules` 中显式存储的键 | 已实现，本地测试通过，待实机验证 |
 
-每个目录都会按文件名顺序读取全部 `*.ini`，后合并的值覆盖先前值。入口 INI 可以
+迁移时将旧 `inject/enabled` 手动移动/改名为 `inject/set`，保留各目标子目录；
+新方案**不会自动加载旧目录**。`[Inject] Enabled` 保留名称，统一控制 set/remove，
+`Mix` 及 `inject/mix` 不变。
+
+每个 set 目录都会按文件名顺序读取全部 `*.ini`，后合并的值覆盖先前值。入口 INI 可以
 使用 ra2hook 自己的 `[#include]`：
 
 ```ini
@@ -65,6 +74,28 @@ SHA256: 7CD005D263FDE203D9C84548200A057A8DF61D724DA3C6BD1E521EEB61CD0747
 
 对 `rules` 新增的单位、建筑、武器、弹体等类型，ra2hook 会补跑原生注册逻辑，
 随后让游戏原流程读取类型定义，而不是只把文本写进 `CCINIClass`。
+
+### 启动阶段显式键删除
+
+主 Hook 完成全部 set rules/ra2md/art 及其私有 include 后，先执行 remove，
+再调用 `RegisterInjectedTypes`、`ReloadInjectedGlobalRules` 并继续原生类型读取。
+首版只扫描 `inject/remove/rules/*.ini`，使用独立严格命令解析器，不作为普通游戏 INI
+解析或复制。示例仅供手动配置，不随仓库创建生效删除文件：
+
+```ini
+[UNIT_ID]
+-=Prerequisite
+-=FactoryOwners
+-=ForbiddenHouses
+```
+
+删除按段名/键名不区分大小写精确匹配；不存在则跳过，重复命令无害。不支持通配符、
+整段删除或注册表/列表段，不注销类型。所有入口及 include 必须全部读入并解析成功后
+才开始删除；任一错误拒绝整个 remove 层，已完成的 set 写入保留，目录缺失则无操作。
+
+remove 不写 `no`/空值，不恢复旧覆盖层值，也不修改默认值或已缓存的 TypeClass 字段。
+Dump 中键缺失只证明显式删除，不保证解除生产限制。编辑后必须完整重启游戏；
+严格语法、include 和错误规则见 [REMOVE_INI.md](./REMOVE_INI.md)。
 
 ### 单机运行时补丁
 
@@ -149,13 +180,15 @@ HTNK_Vehicle_1=HTNK
     |-- ra2hook-ui.exe
     |-- ra2hook.log             # 首次运行后生成
     |-- inject/
-    |   |-- enabled/
+    |   |-- set/
     |   |   |-- rules/
     |   |   |-- art/
     |   |   |-- ra2md/
     |   |   |-- ai/
     |   |   |-- uimd/
     |   |   `-- sound/
+    |   |-- remove/
+    |   |   `-- rules/          # 可选，严格删除命令入口
     |   `-- mix/
     |-- runtime/
     `-- dump/
@@ -184,8 +217,11 @@ Level=3
 将入口文件放入对应目录，例如：
 
 ```text
-<game>\ra2hook\inject\enabled\rules\index.ini
+<game>\ra2hook\inject\set\rules\index.ini
 ```
+
+`[Inject] Enabled` 不改名，同时控制 set 和 remove；启动层不热重载，修改文件或开关后
+须完整重启游戏。旧 `inject/enabled` 必须手动移动/改名为 `inject/set`。
 
 然后通过现有 Syringe/Ares/Phobos 启动链运行游戏。Syringe 会读取 DLL 的
 `.syhks00` 段并安装 Hook，不需要额外握手配置。
@@ -233,7 +269,7 @@ Dump 会增加启动时间和磁盘占用，不使用时建议将 `Enabled` 改�
 
 1. 仓库包含 YRpp submodule；
 2. push 到 `main`、`master` 或 `develop`，也可手动运行 workflow；
-3. Action 使用 MSBuild/v143 构建 Win32 DLL；
+3. Action 先运行 Win32 CTest，再使用 MSBuild/v143 构建 Win32 DLL；
 4. 使用 .NET 8 发布自包含的 `win-x64` 单文件 UI；
 5. 下载名为 `ra2hook-<commit>` 的 artifact。
 
@@ -244,9 +280,15 @@ ra2hook.dll
 ra2hook.pdb
 ra2hook/ra2hook-ui.exe
 ra2hook/ra2hook.ini
+ra2hook/REMOVE_INI.md
+ra2hook/inject/set/<target>/
+ra2hook/inject/remove/rules/
+ra2hook/inject/mix/
 ```
 
-CI 只能验证编译和打包，无法代替真实游戏、Ares、Phobos 与具体 MOD 内容测试。
+空目录通过无执行内容的 `.gitkeep` 随包分发，不附带生效的删除清单。
+本地测试命令见 [tests/README.md](./tests/README.md)。
+CI 验证编译、自动测试和打包，无法代替真实游戏、Ares、Phobos 与具体 MOD 内容测试。
 
 ## 常见问题
 
@@ -254,8 +296,9 @@ CI 只能验证编译和打包，无法代替真实游戏、Ares、Phobos 与具
 |---|---|
 | 完全没有日志 | DLL 是否与 `gamemd.exe` 同级；Syringe 是否加载 DLL |
 | 找不到配置 | 使用 `<game>\ra2hook\ra2hook.ini`；查看日志中的 `Config: 已加载` |
-| 没有 inject 日志 | `[Inject] Enabled=yes`；文件是否在正确目标目录 |
-| include 文件缺失 | 检查相对路径、MIX 注册、文件名；缺失项会告警并跳过 |
+| 没有 inject 日志 | `[Inject] Enabled=yes`；是否已把旧 `inject/enabled` 移至 `inject/set` |
+| set include 文件缺失 | 检查相对路径、MIX 注册、文件名；缺失项会告警并跳过 |
+| remove 未执行 | 所有入口/include 必须有效；任一读取或语法错误会拒绝整个删除层 |
 | INI 已合并但新增单位不存在 | 检查类型列表、`missing` 日志、生产条件和科技条件 |
 | UI 显示运行时未启用 | `[Runtime] Enabled=yes` 后完整重启游戏 |
 | UI 显示未连接 | 游戏是否运行；DLL/UI 是否来自同一次 artifact；游戏目录是否选对 |
@@ -277,7 +320,8 @@ CI 只能验证编译和打包，无法代替真实游戏、Ares、Phobos 与具
 ## 文档索引
 
 - [PROJECT_KEY_POINTS.md](./PROJECT_KEY_POINTS.md)：项目完成关键点、技术决策与维护清单
-- [INJECT_INI.md](./INJECT_INI.md)：启动注入用法、实机结果和排查
+- [INJECT_INI.md](./INJECT_INI.md)：启动 set 注入用法、历史实机结果和迁移
+- [REMOVE_INI.md](./REMOVE_INI.md)：启动 remove 严格命令、原子校验与边界
 - [INJECT_HOOK_ANALYSIS.md](./INJECT_HOOK_ANALYSIS.md)：IDA、Hook 地址和冲突分析
 - [RUNTIME_INI.md](./RUNTIME_INI.md)：运行时架构、安全分级与测试边界
 - [DEVELOPMENT.md](./DEVELOPMENT.md)：完整开发过程和底层设计
@@ -289,6 +333,8 @@ CI 只能验证编译和打包，无法代替真实游戏、Ares、Phobos 与具
 src/
 |-- Hooks.RulesInject.cpp  启动阶段多目标注入与类型补注册
 |-- IniOverlay.cpp         独立 INI/include 解析和事务式合并
+|-- IniRemoval.cpp         独立严格的 -= 删除清单解析、整层校验
+|-- RulesRemoval.cpp       remove/rules 文件读取及原生显式键删除
 |-- Hooks.Runtime.cpp      游戏主线程 Tick Hook
 |-- Runtime.cpp            安全分类、应用、基线和回滚
 |-- RuntimeWatcher.cpp     文件系统监视

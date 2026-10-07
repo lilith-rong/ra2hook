@@ -41,8 +41,9 @@ namespace DumpIni {
 
     // 从已写出的 INI 文件里剔除首部的 [#include] 段。
     //
-    // 为什么在文本层做而不用 INIClass::Clear：Clear(s1,s2) 的语义未文档化，
-    // 而它作用于**真实的 rules 对象**，用错会破坏游戏数据。写盘后改文本零风险。
+    // 为什么在文本层做而不用 INIClass::Clear：此功能只应修改导出副本，不能
+    // 为了清理 dump 而删除真实 rules 对象的 [#include]。Clear 的单键分支现已
+    // 在 RulesRemoval.cpp 核实并使用，但这里仍保持只处理写盘文本。
     //
     // 为什么要剔除：dump 出来的 rules 里 include 内容已全部合并进来，[#include]
     // 段只是历史记录。若直接拿这份文件当 mod 的 rules 用，Ares 会再加载一遍那

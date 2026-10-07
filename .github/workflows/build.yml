@@ -39,6 +39,15 @@ jobs:
     - name: Restore runtime UI
       run: dotnet restore ui/RA2Hook.RuntimeUI.csproj
 
+    - name: Configure removal tests
+      run: cmake -S tests -B removal-tests -A Win32
+
+    - name: Build removal tests
+      run: cmake --build removal-tests --config Release
+
+    - name: Run removal tests
+      run: ctest --test-dir removal-tests -C Release --output-on-failure
+
     - name: Build
       working-directory: ${{ env.GITHUB_WORKSPACE }}
       run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=x86 /p:GitCommit=${{ github.sha }} /p:GitBranch=${{ github.ref_name }} ${{ env.SOLUTION_FILE_PATH }}
@@ -47,9 +56,12 @@ jobs:
     - name: Publish runtime UI
       run: dotnet publish ui/RA2Hook.RuntimeUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o Release/ra2hook
 
-    - name: Stage ra2hook configuration
+    - name: Stage ra2hook configuration and inject directories
       shell: pwsh
-      run: Copy-Item -LiteralPath ra2hook.ini -Destination Release/ra2hook/ra2hook.ini -Force
+      run: |
+        Copy-Item -LiteralPath ra2hook.ini -Destination Release/ra2hook/ra2hook.ini -Force
+        Copy-Item -LiteralPath inject -Destination Release/ra2hook/inject -Recurse -Force
+        Copy-Item -LiteralPath REMOVE_INI.md -Destination Release/ra2hook/REMOVE_INI.md -Force
 
     - name: Upload artifact
       if: ${{ success() }}
@@ -61,3 +73,5 @@ jobs:
           ${{ env.BUILD_CONFIGURATION }}/ra2hook.pdb
           ${{ env.BUILD_CONFIGURATION }}/ra2hook/**
         if-no-files-found: error
+        # Keep the inert .gitkeep files so empty set/remove directories ship.
+        include-hidden-files: true

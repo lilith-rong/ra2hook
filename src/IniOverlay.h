@@ -23,8 +23,8 @@ namespace IniOverlay {
 
     int CountSections(INIClass* pINI);
 
-    // Returns the number of sorted matches, 0 for a valid empty directory,
-    // and -1 for scan failure or when the file limit would truncate results.
+    // Returns the number of sorted matches, 0 for an absent/empty directory,
+    // and -1 for scan failure or when a file/path limit would truncate results.
     int ScanDirectory(const char* dir, const char* wildcard,
                       char files[][kPathMax]);
 

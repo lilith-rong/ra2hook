@@ -2,6 +2,10 @@
 
 记录日期：2026-08-11
 
+历史分析/待测措辞按原记录保留；后续 rules/art 实机结果见 `INJECT_INI.md`。
+本文新增 set/remove 时序与 §11 已实现并通过本地模拟测试，完整 Win32 构建与实机仍待验证；
+`Clear` 的目标二进制静态语义已核实，不代表 remove 经过游戏测试。
+
 本文记录 rules 注入点从 `0x679A15` 后移到 `0x679A1B` 的分析依据、预期时序和实机测试方法，并补充各个 INI 目标与 Ares/Phobos 的兼容边界。
 
 ## 1. 当前结论
@@ -9,7 +13,8 @@
 - 当前源码已切换到 **`0x679A1B`，补丁长度 `0x5`**；这是静态分析通过、实机待验证的候选点。
 - IDA 静态分析确认 `0x679A1B` 位于 Ares/Phobos 使用的 `0x679A15` 之后。
 - 到达 `0x679A1B` 时，`ESI` 已由原程序设置为 `CCINIClass*`，可以直接作为 rules 注入目标。
-- `0x679A1B` 仍在第一段 TypeClass 读取之前；当前 handler 会在合并私有 INI 后补跑原生类型列表注册，再让后续 TypeClass 解析采纳新增定义和值覆盖。
+- `0x679A1B` 仍在第一段 TypeClass 读取之前；新方案要求全部主 set rules/ra2md/art
+  及其私有 include 完成后执行 remove，再补注册类型、重读全局段并继续原生读取。
 - 该方案避免 ra2hook 与 Ares/Phobos 在 `0x679A15` 上依赖同址 hook 的执行顺序。
 - inject 文件现在通过 `CCFileClass` 读取原始字节并由 ra2hook 自己解析，不再调用
   可能被 Ares hook 的 `CCINIClass::ReadCCFile`；私有 `[#include]` 只展开一次。
@@ -63,7 +68,7 @@ SHA-256：7cd005d263fde203d9c84548200a057a8df61d724da3c6bd1e521eeb61cd0747
 
 IDA 中已经在 `0x679A1B` 留下注释，说明该地址是 ra2hook 的 post-Ares/Phobos 候选注入点。
 
-## 4. 预期执行时序
+## 4. 预期执行时序（含已批准 remove 阶段）
 
 ```text
 原程序先执行 0x679A10
@@ -75,7 +80,14 @@ Ares/Phobos 在 0x679A15 的 handler 完成 INI/include 相关处理
 Syringe 重放 0x679A15 的 6 字节，ESI = CCINIClass*
         |
         v
-ra2hook 在 0x679A1B 合并私有 inject INI
+ra2hook 在 0x679A1B 合并全部 set rules/ra2md/art 及私有 include
+        |
+        v
+全部 remove/rules 根文件和 include 严格校验成功后，删除 INI_Rules 显式键
+（任一失败则整个 remove 层不执行，已完成 set 保留）
+        |
+        v
+RegisterInjectedTypes -> ReloadInjectedGlobalRules
         |
         v
 Syringe 重放 0x679A1B 的 5 字节
@@ -128,7 +140,7 @@ Strength=321
 
 ### 6.2 准备 ra2hook 私有 include
 
-创建 `ra2hook\inject\enabled\rules\index.ini`：
+创建 `ra2hook\inject\set\rules\index.ini`：
 
 ```ini
 [#include]
@@ -156,7 +168,9 @@ Mix=yes
 Level=4
 ```
 
-目标由 `enabled/<target>/` 子目录决定；此处不再提供无法表达目标类型的全局文件列表。
+目标由 `set/<target>/` 子目录决定；此处不再提供无法表达目标类型的全局文件列表。
+旧 `inject/enabled` 需手动移动/改名为 `inject/set`，不自动加载旧目录。
+`[Inject] Enabled` 保留名称，控制 set/remove；`Mix` 不变，编辑启动层后须重启游戏。
 
 ### 6.3 内置探针日志
 
@@ -229,11 +243,11 @@ INI 合并成功，不能证明类型已经注册。
 
 ## 9. 多 INI 与 Ares/Phobos 兼容矩阵
 
-### 9.1 多文件合并规则
+### 9.1 set 多文件合并规则
 
-- 始终扫描 `enabled/<target>/*.ini`；目录名决定注入对象，每个目标目录按文件名不区分大小写排序后逐个合并。
+- 始终扫描 `set/<target>/*.ini`；目录名决定注入对象，每个目标目录按文件名不区分大小写排序后逐个合并。
 - 每个文件先合并自身正文，再按 `[#include]` 段中的出现顺序深度优先合并引用文件；重复键也保留，故 Ares 常用的多行 `+=文件.ini` 可作为私有 include 入口。引用文件后写，因此覆盖当前文件。
-- 推荐把 `enabled/<target>` 只作为入口目录，真正的可选规则放在 mix 或其他目录中由 `index.ini` 引用；否则同一个文件既会被目录扫描又会被 include，可能被重复写入。
+- 推荐把 `set/<target>` 只作为入口目录，真正的可选规则放在 mix 或其他目录中由 `index.ini` 引用；否则同一个文件既会被目录扫描又会被 include，可能被重复写入。
 - include 路径先相对当前散装文件目录解析，再按游戏/MIX 文件系统解析。mix 会在每个目标首次注入前注册，因此较早的 `sound/ai/uimd` 挂点也能引用 mix 内 INI。循环引用和超过 32 层的链会被跳过并写日志。
 - 注入文件支持普通 `section/key=value` 语法。Ares/Phobos 的 `$Inherits` 等扩展语义不会在私有链中自动复制。
 - 普通段中的 Ares 列表追加语法 `+=TypeName` 也会被保留为独立追加项；写入真实引擎对象时转换为 ra2hook 专用的 `RA2Hook_N=TypeName`，不会像普通 `WriteString("+", ...)` 那样只留下最后一项。ra2hook 不扫描、不复用 Ares/Phobos 使用的 `var_N` 键名空间。由于列表注册早于 `0x679A1B`，handler 合并后会按原版顺序补跑发生变化的原生列表注册；`WeaponTypes` 与 `Projectiles` 没有 `RulesClass::Read_*` 包装函数，则逐项调用原生 `FindOrAllocate`。现有实机 dump 还发现 2 个社区规则把弹体追加到单数 `[Projectile]`，因此该段也作为兼容别名参与 BulletType 补注册，但不会被改名或写回 `[Projectiles]`。这解决“定义段存在但新增类型未注册”的问题，同时避免仅修改普通字段时重复重跑全部列表。
@@ -272,7 +286,7 @@ Phobos Build #47+6_0 下依次否决了三个点，均会触发 `C0000005`，即
 
 1. `0x52C6C4` 覆盖完整 5 字节 `mov eax,dword ptr [88730Ch]`。此时尚未打开
    SOUNDMD.INI，handler 在这里执行 `Config::Load()`、注册 MIX，并把
-   `enabled/sound/*.ini` 及私有 include 合并到引擎分配的持久 `CCINIClass`。
+   `set/sound/*.ini` 及私有 include 合并到引擎分配的持久 `CCINIClass`。
 2. `0x7510F6` 覆盖完整 5 字节 `mov dword ptr [B1D3A4h],eax`。前一条
    `0x7510F4 mov ecx,edi` 已令 `ECX` 指向 SOUNDMD 对象；handler 只校验 vtable
    `0x7E1AF4` 并复制预备覆盖层，不再读取配置或文件。第一处 `[Defaults]` 查询在
@@ -323,3 +337,39 @@ sound 还需单独确认：日志先出现 `inject prepare @0x52C6C4`，再出�
 `+=` include，以及引用 MIX 内唯一命名 INI 的情况。
 
 在这些测试完成前，应把 `0x679A1B` 标记为“静态分析通过、实机待验证”，不要写成已验证挂点。
+
+## 11. remove 原生删除适配（新增静态结论）
+
+首版 remove 只接受 `inject/remove/rules/*.ini` 的严格命令，不是普通游戏 INI。
+`[UNIT_ID]` 下的重复 `-=Key` 按顺序保留；`[#include]` 允许 `+=path` 与普通命名/编号
+`key=path`，禁止 `-`。正文先于子 include，路径先当前文件再游戏/MIX。所有入口及
+include 必须全部读入/解析成功后才删除；缺失子文件、坏语法、循环、深度超过 32 或
+资源超限均拒绝整个 remove 层，保留 set 写入。缺失 remove 目录是合法无操作。
+
+段/键不区分大小写精确匹配，不存在则跳过，重复命令无害。禁止通配符、整段删除和
+注册表/列表段；不注销单位、不写 `no`/空值、不恢复旧层值，也不修改默认值或已缓存
+TypeClass 数据。完整语法及入口外片段示例见 [REMOVE_INI.md](./REMOVE_INI.md)。
+
+### 11.1 `INIClass::Clear @0x5257C0`
+
+已在 §2 目标 MD5 `56d582a1d6f3c144d3adc867d7a4d91b` 的原生二进制中通过反汇编及
+IDA 反编译确认（当前 IDB 的 MD5/SHA-256 均与目标一致）：
+
+| 条件/动作 | 静态语义 |
+|---|---|
+| 清理当前段缓存 | 对象 `+0x4` / `+0x8` 的 `CurrentSection` 相关缓存清零 |
+| section 为 null | 整个 INI 重置；remove 适配器禁止此调用 |
+| key 为 null | 整个 section 删除；remove 适配器禁止此调用 |
+| section/key 都非 null | 删除 `EntryIndex` 项并调用 entry 虚析构 |
+
+因此适配器应先遍历实际 section/entry 链表做精确预查找，缺失则直接跳过；把实际存储
+大小写的名称交给原生 Clear，且段名和 key 都必须非 null，之后复查 entry 已不存在。
+不得手工摘链而绕过原生索引/缓存维护，也不能把写空串当作删除。
+
+### 11.2 验证分层
+
+原生语义已静态核实；本地 20 组解析器测试和 7 组生产适配器模拟测试通过，覆盖命令
+保留、include 顺序、跨根失败零删除、set 保留、语法/资源边界、文件查找和 Clear 调用
+前后检查。ASan/UBSan 检查通过，但模拟接口不能替代真实游戏 ABI 或扩展共存验证。
+本机无 MSVC，完整 Win32 构建和游戏实测仍待执行。
+Dump 中目标键缺失只证明显式删除，不证明默认值、缓存或生产限制已改变。
