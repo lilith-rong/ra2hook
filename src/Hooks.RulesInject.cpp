@@ -205,6 +205,8 @@ namespace RulesInject {
             obj, dir, _stricmp(t.dir, "rules") == 0, stats);
         if (!success) {
             Log::Warn("inject: %s 补丁未完整应用，详见 patch 日志", t.label);
+            if (!Config::Get().inject.mix)
+                Log::Warn("inject: [Inject] Mix 未开启，[#include] 引用的 mix 内 INI 无法找到");
         }
         const int total = static_cast<int>(stats.writes + stats.appends + stats.removals);
         Log::Info("inject: %s <- %s（%d 条变更）", t.label, dir, total);
@@ -780,7 +782,8 @@ namespace RulesInject {
         if (s_mix_done) return;
         s_mix_done = true;
 
-        char found[kMaxFiles][kPathMax] = {};
+        // MixFileClass may keep the name pointer; keep the buffer alive.
+        static char found[kMaxFiles][kPathMax] = {};
         const int n = ScanDir(kMixDir, "*.mix", found);
         if (n < 0) {
             Log::Warn("inject: 无法完整扫描目录 %s，跳过 mix 装载", kMixDir);

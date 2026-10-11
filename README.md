@@ -203,9 +203,9 @@ DLL、配置、日志和运行时目录都根据实际运行的游戏 EXE 路径
 
 ## 快速开始
 
-Action 成品的 `ra2hook.ini` 默认关闭 Dump、Inject、Runtime、全部导出子项、MIX、
-自动应用及日志。使用前手动开启需要的总开关和子项；仅安装成品不会自动启用这些功能。
-Actions 会检查打包后的配置，意外启用任一默认开关时拒绝打包。
+Action 成品的 `ra2hook.ini` 默认开启 Inject 与 Mix，关闭 Dump、Runtime、
+全部导出子项、自动应用及日志。Actions 会检查打包后的配置，默认值偏离时拒绝打包。
+排查问题时把 `[Log] Level` 改为 3，否则不会生成 `ra2hook.log`。
 
 ### 1. 启用启动注入
 

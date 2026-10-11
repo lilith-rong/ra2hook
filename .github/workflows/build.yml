@@ -63,7 +63,8 @@ jobs:
         New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
         Copy-Item -LiteralPath ra2hook.ini -Destination (Join-Path $packageRoot 'ra2hook.ini') -Force
 
-        # Fail packaging if the shipped template accidentally enables a feature.
+        # Fail packaging if the shipped template drifts from the agreed defaults:
+        # Inject and Mix on, everything else off.
         # This checks the staged copy, not a developer's installed game config.
         $defaults = @{}
         $section = ''
@@ -74,9 +75,13 @@ jobs:
             $defaults["$section.$($Matches[1])"] = $Matches[2].Trim()
           }
         }
+        $onKeys = @('Inject.Enabled', 'Inject.Mix')
+        foreach ($key in $onKeys) {
+          if ($defaults[$key] -ne 'yes') { throw "Packaged default: $key must be yes" }
+        }
         $offKeys = @(
           'Dump.Enabled', 'Dump.INI', 'Dump.CSF', 'Dump.VXL', 'Dump.SHP',
-          'Dump.SortByOwner', 'Dump.StripInclude', 'Inject.Enabled', 'Inject.Mix',
+          'Dump.SortByOwner', 'Dump.StripInclude',
           'Runtime.Enabled', 'Runtime.AutoApply'
         )
         foreach ($key in $offKeys) {

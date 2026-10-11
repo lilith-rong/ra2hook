@@ -73,7 +73,11 @@ namespace {
             source.path = IniPatch::NormalizePath(path);
             return true;
         }
-        error = "file not found (relative, game directory and engine/MIX lookup)";
+        // List every candidate so a missing MIX registration is obvious
+        // (bare names inside a MIX only resolve after [Inject] Mix registered it).
+        error = "file not found; tried:";
+        for (const auto& candidate : candidates) error += " [" + candidate + "]";
+        error += " (names inside inject/mix need [Inject] Mix=yes)";
         return false;
     }
 
