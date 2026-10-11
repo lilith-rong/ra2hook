@@ -174,7 +174,9 @@ namespace {
         // Records the most recent Fail() as a dropped file. Always false.
         bool Drop(const std::string& skipped, bool)
         {
-            pending_.skipped = skipped;
+            // An empty request (e.g. an empty root name) still needs a
+            // visible name in the "skipped" log line.
+            pending_.skipped = skipped.empty() ? "(empty path)" : skipped;
             plan.dropped.push_back(std::move(pending_));
             pending_ = {};
             return false;
