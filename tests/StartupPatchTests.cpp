@@ -127,29 +127,35 @@ void EmptyAndAbsentSections()
     CHECK(target.Section("A") && !target.Section("A")->Entries.First());
     CHECK(!target.Section("Missing") && target.clearCalls.size() == 1 && !target.unsafeClear);
 }
-void PreflightNoPartialChanges()
+void InvalidFileDroppedAlone()
 {
-    for (const std::string invalid : { "[A]\n-=\n", "[A]\n+=\n", "[A]\n-=*\n",
+    for (const std::string invalid : { "[A]\nPartial=1\n-=\n", "[A]\n+=\n", "[A]\n-=*\n",
           "[VehicleTypes]\n-=1\n", "[A\n-=Second\n", "[#include]\n-=bad.ini\n" }) {
-        Manifest("[A]\nFirst=changed\n-=Second\n+=APPENDED\n[#include]\n+=bad.ini\n");
+        Manifest("[A]\nFirst=changed\n-=Second\n+=APPENDED\n[#include]\n+=bad.ini\n[A]\nTail=1\n");
         FakeFiles::Add(directory + "/bad.ini", invalid);
         CCINIClass target; target.Add("A", "First", "original"); target.Add("A", "Second", "keep");
-        CHECK(!Run(target));
-        CHECK(target.mutations.empty() && target.clearCalls.empty());
-        CHECK(target.Entry("A", "First")->valueStorage == "original");
-        CHECK(target.Entry("A", "Second") && !target.Entry("A", "RA2Hook_0"));
+        StartupPatch::Stats stats;
+        CHECK(StartupPatch::ApplyDirectory(&target, directory.c_str(), true, stats));
+        CHECK(stats.skipped == 1);
+        // The parent applies in full; nothing from the bad include does.
+        CHECK(target.Entry("A", "First")->valueStorage == "changed");
+        CHECK(!target.Entry("A", "Second") && target.Entry("A", "RA2Hook_0"));
+        CHECK(target.Entry("A", "Tail") && !target.Entry("A", "Partial"));
     }
     Manifest("[A]\nFirst=changed\n-=Second\n");
     const auto later = directory + "/99-bad.ini";
-    FakeFiles::roots.push_back(later); FakeFiles::Add(later, "[A]\n-=\n");
+    FakeFiles::roots.push_back(later); FakeFiles::Add(later, "[A]\nLater=1\n-=\n");
     CCINIClass target; target.Add("A", "Second", "keep");
-    CHECK(!Run(target) && target.mutations.empty() && target.Entry("A", "Second"));
+    StartupPatch::Stats stats;
+    CHECK(StartupPatch::ApplyDirectory(&target, directory.c_str(), true, stats));
+    CHECK(stats.skipped == 1 && target.Entry("A", "First") && !target.Entry("A", "Second"));
+    CHECK(!target.Entry("A", "Later"));
 }
 void NonRulesAndRegistryPolicy()
 {
     Manifest("[A]\nValue=changed\n-=Other\n");
     CCINIClass target; target.Add("A", "Value", "original");
-    CHECK(!Run(target, false) && target.mutations.empty());
+    CHECK(Run(target, false) && target.mutations.empty()); // Root dropped as a whole.
     CHECK(target.Entry("A", "Value")->valueStorage == "original");
     Manifest("[VehicleTypes]\n+=MYTANK\n[MYTANK]\nStrength=800\n-=Prerequisite\n");
     CHECK(Run(target));
@@ -169,9 +175,13 @@ void ReadFailures()
             if (mode == 3) f.reportedSize = static_cast<int>(IniPatch::kMaxFileBytes + 1);
             FakeFiles::Add("bad.ini", "[A]\nValue=wrong-fallback\n");
         }
-        CCINIClass target; target.Add("A", "First", "original");
-        CHECK(!Run(target) && target.mutations.empty());
-        CHECK(target.Entry("A", "First")->valueStorage == "original");
+        CCINIClass target; target.Add("A", "First", "original"); target.Add("A", "Second", "x");
+        StartupPatch::Stats stats;
+        CHECK(StartupPatch::ApplyDirectory(&target, directory.c_str(), true, stats));
+        CHECK(stats.skipped == 1);
+        CHECK(target.Entry("A", "First")->valueStorage == "changed");
+        CHECK(!target.Entry("A", "Second"));
+        CHECK(!target.Entry("A", "Value")); // No fallback to another file.
     }
 }
 void ResolutionAndMix()
@@ -193,8 +203,11 @@ void ResolutionAndMix()
 void CyclesAndScanFailures()
 {
     Manifest("[A]\nFirst=changed\n[#include]\n+=.\\..\\rules\\10-MAIN.ini\n");
-    CCINIClass target; target.Add("A", "First", "keep");
-    CHECK(!Run(target) && target.mutations.empty());
+    CCINIClass cyclic; cyclic.Add("A", "First", "keep");
+    StartupPatch::Stats cycleStats;
+    CHECK(StartupPatch::ApplyDirectory(&cyclic, directory.c_str(), true, cycleStats));
+    CHECK(cycleStats.skipped == 1 && cyclic.Entry("A", "First")->valueStorage == "changed");
+    CCINIClass target;
     FakeFiles::Reset();
     CHECK(Run(target) && FakeFiles::scannedDirectory == directory);
     FakeFiles::scanFails = true; CHECK(!Run(target) && target.mutations.empty());
@@ -252,7 +265,7 @@ int main()
         { "sorted roots, in-place include and later overrides", SortedRootsAndIncludeOrder },
         { "repeated append identities and explicit-key collisions", AppendIdentityAndCollisions },
         { "empty and missing sections are not deleted/created", EmptyAndAbsentSections },
-        { "whole-target preflight prevents ALL partial mutations", PreflightNoPartialChanges },
+        { "invalid file dropped alone, rest applies", InvalidFileDroppedAlone },
         { "rules-only removal and registry additions", NonRulesAndRegistryPolicy },
         { "missing/open/short/oversize source failures", ReadFailures },
         { "relative/game/MIX resolution and instruction order", ResolutionAndMix },

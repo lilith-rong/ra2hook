@@ -33,16 +33,18 @@ namespace IniPatch {
         std::size_t line = 0;
     };
 
-    struct Plan {
-        std::vector<Command> commands;
-        std::size_t files = 0;
-        bool allowRemoval = false;
-    };
-
     struct Error {
-        std::string file;
+        std::string file;    // Where the problem was detected (parent for includes).
         std::size_t line = 0;
         std::string message;
+        std::string skipped; // File dropped because of it (request or resolved path).
+    };
+
+    struct Plan {
+        std::vector<Command> commands;
+        std::size_t files = 0;      // Files whose commands are in the plan.
+        bool allowRemoval = false;
+        std::vector<Error> dropped; // Files skipped individually, in order.
     };
 
     using Reader = bool (*)(const std::string& request,
@@ -54,8 +56,11 @@ namespace IniPatch {
     bool IsRemovalTarget(const std::string& section, const std::string& key);
 
     // roots are supplied in sorted order. Includes execute exactly where they
-    // occur, then the caller resumes its own section/line. ANY read/parse failure
-    // leaves output empty. No engine mutation takes place while building a plan.
+    // occur, then the caller resumes its own section/line. A read/parse/limit
+    // failure drops only that file (and everything it had expanded) and is
+    // listed in output.dropped; all other files still build. Returns false only
+    // for unusable arguments (null reader, >256 roots), with error set.
+    // No engine mutation takes place while building a plan.
     // Removal is opt-in and must only be enabled for startup INI_Rules.
     bool BuildPlan(const std::vector<std::string>& roots, Reader reader,
                    void* context, Plan& output, Error& error,

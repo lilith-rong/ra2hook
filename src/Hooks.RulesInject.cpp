@@ -33,7 +33,8 @@
 //   注入目标只由 inject/<target> 目录决定，不存在跨目标的全局文件列表。
 //   每个目标的全部根文件/include 先校验为有序计划，成功后逐行执行赋值、
 //   += 追加和 -= 删除（仅 rules）；后出现者优先，不存在最终 remove 阶段。
-//   预校验失败该目标零修改；原生执行失败停止但不承诺回滚。默认值不变。
+//   单个文件缺失/校验失败只丢弃该文件（连同它已展开的 include），其余照常；
+//   原生执行失败停止但不承诺回滚。默认值不变。
 //   inject 文件内的 [#include] 由 ra2hook 自己展开，独立于 Ares/Phobos：
 //     - 不修改原 rules/art 的 [#include] 段
 //     - 不把 inject 文件自己的 [#include] 段写入引擎目标对象
@@ -165,7 +166,7 @@ namespace RulesInject {
                GamePaths::Build(directory, capacity, relative);
     }
 
-    // 对单个目标：扫描 inject/<dir>，整目标校验后按计划顺序执行。
+    // 对单个目标：扫描 inject/<dir>，逐文件校验（无效/缺失文件单独跳过）后按计划顺序执行。
     // 守卫：目标对象必须已装载（段数>0）才注入，否则写进未装载/未就绪的
     // 对象是无效的（引擎可能在装载时重建/覆盖该对象）。
     // 各目标装载时机：
@@ -205,6 +206,10 @@ namespace RulesInject {
             obj, dir, _stricmp(t.dir, "rules") == 0, stats);
         if (!success) {
             Log::Warn("inject: %s 补丁未完整应用，详见 patch 日志", t.label);
+        }
+        if (stats.skipped > 0) {
+            Log::Warn("inject: %s 跳过 %zu 个无效/缺失的 ini（其余照常注入），详见 patch 日志",
+                      t.label, stats.skipped);
             if (!Config::Get().inject.mix)
                 Log::Warn("inject: [Inject] Mix 未开启，[#include] 引用的 mix 内 INI 无法找到");
         }
@@ -919,7 +924,7 @@ namespace RulesInject {
 
         s_sound_ready = StartupPatch::Prepare(dir, false, s_sound_plan);
         if (!s_sound_ready) {
-            Log::Warn("inject prepare @0x52C6C4: SOUNDMD 补丁计划校验失败，整目标跳过");
+            Log::Warn("inject prepare @0x52C6C4: SOUNDMD 目录无法扫描，整目标跳过");
             return;
         }
         Log::Info("inject prepare @0x52C6C4: SOUNDMD 有序计划已就绪（%zu 文件，%zu 条指令）",

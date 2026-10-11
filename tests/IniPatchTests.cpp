@@ -6,6 +6,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -49,6 +50,7 @@ Plan Stale()
     plan.allowRemoval = true;
     plan.files = 42;
     plan.commands.push_back({ Operation::Remove, "Old", "Key", {}, "old.ini", 99 });
+    plan.dropped.push_back({ "old.ini", 99, "old", "old.ini" });
     return plan;
 }
 Plan Build(MemoryReader& reader, const std::vector<std::string>& roots, bool remove = true)
@@ -59,18 +61,43 @@ Plan Build(MemoryReader& reader, const std::vector<std::string>& roots, bool rem
     Require(ok, error.file + ":" + std::to_string(error.line) + ": " + error.message);
     CHECK(error.file.empty() && error.message.empty() && error.line == 0);
     CHECK(plan.allowRemoval == remove);
+    Require(plan.dropped.empty(), plan.dropped.empty() ? "" :
+            "unexpected drop: " + plan.dropped[0].file + ": " + plan.dropped[0].message);
     return plan;
 }
-Error Fails(MemoryReader& reader, const std::vector<std::string>& roots,
-            const std::string& diagnostic, bool remove = true)
+// Builds a plan that is expected to drop some files; the build itself succeeds.
+Plan Partial(MemoryReader& reader, const std::vector<std::string>& roots, bool remove = true)
 {
     Plan plan = Stale();
     Error error { "old", 99, "old" };
-    CHECK(!BuildPlan(roots, MemoryReader::Read, &reader, plan, error, remove));
-    CHECK(plan.commands.empty() && plan.files == 0 && !plan.allowRemoval);
+    CHECK(BuildPlan(roots, MemoryReader::Read, &reader, plan, error, remove));
+    CHECK(error.file.empty() && error.message.empty() && error.line == 0);
+    CHECK(!plan.dropped.empty());
+    return plan;
+}
+// A bad file is dropped on its own; returns the first matching drop record.
+Error Fails(MemoryReader& reader, const std::vector<std::string>& roots,
+            const std::string& diagnostic, bool remove = true)
+{
+    const Plan plan = Partial(reader, roots, remove);
+    for (const auto& dropped : plan.dropped) {
+        if (dropped.message.find(diagnostic) != std::string::npos) {
+            CHECK(!dropped.skipped.empty());
+            return dropped;
+        }
+    }
+    Require(false, "expected drop '" + diagnostic + "', got '" + plan.dropped[0].message + "'");
+    return {};
+}
+// Unusable arguments still reject the whole build.
+void Fatal(MemoryReader& reader, const std::vector<std::string>& roots, const std::string& diagnostic)
+{
+    Plan plan = Stale();
+    Error error;
+    CHECK(!BuildPlan(roots, MemoryReader::Read, &reader, plan, error));
+    CHECK(plan.commands.empty() && plan.files == 0 && plan.dropped.empty());
     Require(error.message.find(diagnostic) != std::string::npos,
             "expected '" + diagnostic + "', got '" + error.message + "'");
-    return error;
 }
 void Location(const Error& e, const std::string& file, std::size_t line)
 { CHECK(e.file == file && e.line == line); }
@@ -145,6 +172,10 @@ void IncludesInPlace()
     r.Add("orphan.ini", "Key=no-section\n");
     r.Add("parent.ini", "[Tank]\nA=1\n[#include]\n+=orphan.ini\n");
     Location(Fails(r, { "parent.ini" }, "outside a section"), "orphan.ini", 1);
+    const auto kept = Partial(r, { "parent.ini" });
+    CHECK(kept.commands.size() == 1 && kept.files == 1 && kept.dropped.size() == 1);
+    CommandAt(kept, 0, Operation::Set, "Tank", "A", "1", "parent.ini", 2);
+    CHECK(kept.dropped[0].skipped == "orphan.ini");
 }
 void QuotesAndResolution()
 {
@@ -306,12 +337,12 @@ void RegistryAndTargetPolicy()
     r.Add("unit.ini", "[Tank]\nA=1\n-=Armor\nA=2\n");
     Fails(r, { "unit.ini" }, "only supported in inject/rules", false);
     Plan p; Error e;
-    CHECK(!BuildPlan({ "unit.ini" }, MemoryReader::Read, &r, p, e)); // Safe API default.
-    CHECK(p.commands.empty());
+    CHECK(BuildPlan({ "unit.ini" }, MemoryReader::Read, &r, p, e)); // Safe API default.
+    CHECK(p.commands.empty() && p.dropped.size() == 1);
     r.Add("near.ini", "[VehicleTypes.X]\n-=Foo\n[MyWarheads]\n-=Bar\n");
     CHECK(Build(r, { "near.ini" }).commands.size() == 2);
 }
-void ReadFailuresAndAtomicPlan()
+void ReadFailuresDropPerFile()
 {
     MemoryReader r;
     r.Add("good.ini", "[Tank]\nA=1\n-=Armor\n+=Thing\n");
@@ -319,8 +350,17 @@ void ReadFailuresAndAtomicPlan()
     r.Add("bad-body.ini", "[#include]\n+=good.ini\n[Tank]\n-=\n");
     r.Add("child.ini", "[Tank]\nA=1\n[#include]\n+=bad.ini\n");
     r.Add("unreadable.ini", ""); r.files.at("unreadable.ini").readable = false;
-    for (const auto& path : { "bad.ini", "missing.ini", "unreadable.ini", "child.ini", "bad-body.ini" }) {
-        Fails(r, { "good.ini", path }, "");
+    const std::vector<std::tuple<const char*, std::size_t, const char*>> cases {
+        { "bad.ini", 3, "bad.ini" }, { "missing.ini", 3, "missing.ini" },
+        { "unreadable.ini", 3, "unreadable.ini" },
+        { "child.ini", 4, "bad.ini" },        // Only the bad child goes; child keeps A=1.
+        { "bad-body.ini", 3, "bad-body.ini" } // Its expanded good.ini is rolled back too.
+    };
+    for (const auto& [path, commands, skipped] : cases) {
+        const auto p = Partial(r, { "good.ini", path });
+        CHECK(p.commands.size() == commands && p.dropped.size() == 1);
+        CHECK(p.dropped[0].skipped == skipped);
+        for (std::size_t i = 0; i < 3; ++i) CHECK(p.commands[i].file == "good.ini");
         CHECK(Build(r, { "good.ini" }).commands.size() == 3); // Recovery after failure.
     }
     r.calls.clear();
@@ -328,6 +368,36 @@ void ReadFailuresAndAtomicPlan()
     CHECK(r.calls.size() == 2); // Child read first, but no partial plan exposed.
     r.Alias("empty-path.ini", "", "[Tank]\nA=1\n");
     Location(Fails(r, { "empty-path.ini" }, "invalid resolved path"), "empty-path.ini", 0);
+}
+void DropIsolation()
+{
+    MemoryReader r;
+    // root -> child (valid) -> grand (invalid): only grand is dropped.
+    r.Add("root.ini", "[A]\nBefore=1\n[#include]\n+=child.ini\n[A]\nAfter=1\n");
+    r.Add("child.ini", "[B]\nKey=1\n[#include]\n+=grand.ini\n+=missing.ini\n[B]\nTail=1\n");
+    r.Add("grand.ini", "[C]\nKey=1\nbroken\n");
+    auto p = Partial(r, { "root.ini" });
+    CHECK(p.files == 2 && p.commands.size() == 4 && p.dropped.size() == 2);
+    CommandAt(p, 0, Operation::Set, "A", "Before", "1", "root.ini", 2);
+    CommandAt(p, 1, Operation::Set, "B", "Key", "1", "child.ini", 2);
+    CommandAt(p, 2, Operation::Set, "B", "Tail", "1", "child.ini", 7);
+    CommandAt(p, 3, Operation::Set, "A", "After", "1", "root.ini", 6);
+    CHECK(p.dropped[0].skipped == "grand.ini" && p.dropped[0].file == "grand.ini" && p.dropped[0].line == 3);
+    CHECK(p.dropped[1].skipped == "missing.ini" && p.dropped[1].file == "child.ini" && p.dropped[1].line == 5);
+    // child itself broken after expanding a valid grand: child + grand rolled back,
+    // parent continues with its own following lines.
+    r.Add("grand.ini", "[C]\nKey=1\n");
+    r.Add("child.ini", "[B]\nKey=1\n[#include]\n+=grand.ini\n[B]\n-=\n");
+    p = Partial(r, { "root.ini" });
+    CHECK(p.files == 1 && p.commands.size() == 2 && p.dropped.size() == 1);
+    CommandAt(p, 0, Operation::Set, "A", "Before", "1", "root.ini", 2);
+    CommandAt(p, 1, Operation::Set, "A", "After", "1", "root.ini", 6);
+    CHECK(p.dropped[0].skipped == "child.ini" && p.dropped[0].line == 6);
+    // A later root is unaffected by an earlier dropped root.
+    r.Add("other.ini", "[D]\nKey=1\n");
+    p = Partial(r, { "root.ini", "other.ini" });
+    CHECK(p.files == 2 && p.commands.size() == 3);
+    CommandAt(p, 2, Operation::Set, "D", "Key", "1", "other.ini", 2);
 }
 void CyclesAndDepth()
 {
@@ -357,7 +427,7 @@ void PathRootAndTokenLimits()
     CHECK(p.commands.empty() && p.files == 0);
     r.Add("root.ini", "[Tank]\nA=1\n");
     CHECK(Build(r, std::vector<std::string>(256, "root.ini")).files == 256);
-    Fails(r, std::vector<std::string>(257, "root.ini"), "too many root files");
+    Fatal(r, std::vector<std::string>(257, "root.ini"), "too many root files");
     Fails(r, { "" }, "empty or overlong");
     const std::string path(kMaxPath - 1, 'a'), tooLong(kMaxPath, 'a');
     r.Add(path, "[Tank]\nA=1\n");
@@ -429,7 +499,8 @@ int main()
         { "invalid headers, text, encoding and line diagnostics", InvalidHeaders },
         { "invalid include commands and paths", InvalidIncludes },
         { "registry writes allowed, removal policy enforced", RegistryAndTargetPolicy },
-        { "all-roots preflight, stale plan reset and recovery", ReadFailuresAndAtomicPlan },
+        { "per-file drop, rollback and recovery", ReadFailuresDropPerFile },
+        { "dropped subtree isolation keeps parents", DropIsolation },
         { "canonical cycles and depth boundary", CyclesAndDepth },
         { "reader, root, path and token limits", PathRootAndTokenLimits },
         { "shared file and mixed command limits", FileAndCommandLimits },

@@ -52,11 +52,11 @@
 - [x] sound 保持既有两 Hook 安全边界，早期预读计划、后期仅内存执行。
 - [x] Runtime 仍用 IniOverlay，不消费 -=，既有基线恢复与解析策略不变。
 - [x] 重写规划器 16 组、模拟适配器 12 组测试，覆盖混合顺序、include/根顺序、
-      失败零修改、追加身份、存储大小写、资源边界、source-free sound 应用和原生失败。
+      逐文件丢弃、追加身份、存储大小写、资源边界、source-free sound 应用和原生失败。
 - [x] CI 接入新测试源，打包六目标+mix 空目录和 INJECT_INI.md/REMOVE_INI.md。
-- [x] 成品 ra2hook.ini 所有功能/子项/自动应用默认 no、日志 Level=0；Actions 校验打包后的安全默认值。
+- [x] 成品 ra2hook.ini 默认 Inject/Mix=yes，其余功能/子项/自动应用 no、日志 Level=0；Actions 校验打包默认值。
 - [ ] 运行 GitHub Actions 测试及完整 Win32 DLL 构建（本轮未本地编译或运行测试）。
-- [ ] 游戏完整重启验证混合顺序、include 覆盖、坏输入零修改，以及真实单位/武器功能。
+- [ ] 游戏完整重启验证混合顺序、include 覆盖、坏输入仅跳过对应文件，以及真实单位/武器功能。
 
 历史：旧独立删除实现曾通过 20+7 组测试和 ASan/UBSan；目标 MD5 对应 Clear 分支也已
 由 IDA 核实。这些证据不能代替当前有序实现的 CI、ABI 和 Ares/Phobos 游戏验证。

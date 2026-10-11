@@ -153,12 +153,19 @@ bool Prepare(const char* directory, bool allowRemoval, IniPatch::Plan& plan)
 
     IniPatch::Error error;
     if (!IniPatch::BuildPlan(roots, ReadSource, nullptr, plan, error, allowRemoval)) {
-        Log::Warn("patch: rejected entire target %s at %s:%zu: %s; no changes applied",
-                  directory, error.file.c_str(), error.line, error.message.c_str());
+        Log::Warn("patch: cannot build %s: %s; no changes applied",
+                  directory, error.message.c_str());
         return false;
     }
-    Log::Info("patch: prepared %s (%zu files, %zu ordered instructions)",
-              directory, plan.files, plan.commands.size());
+    // Each failed file is skipped on its own (with anything it included);
+    // the rest of the target still applies.
+    for (const auto& dropped : plan.dropped) {
+        Log::Warn("patch: skipped %s (%s:%zu: %s)",
+                  dropped.skipped.c_str(), dropped.file.c_str(), dropped.line,
+                  dropped.message.c_str());
+    }
+    Log::Info("patch: prepared %s (%zu files, %zu ordered instructions, %zu skipped)",
+              directory, plan.files, plan.commands.size(), plan.dropped.size());
     return true;
 }
 
@@ -258,6 +265,9 @@ bool ApplyDirectory(CCINIClass* target, const char* directory,
     stats = {};
     if (!target) return false;
     IniPatch::Plan plan;
-    return Prepare(directory, allowRemoval, plan) && Apply(target, plan, stats);
+    if (!Prepare(directory, allowRemoval, plan)) return false;
+    const bool applied = Apply(target, plan, stats);
+    stats.skipped = plan.dropped.size(); // Apply resets stats.
+    return applied;
 }
 } // namespace StartupPatch

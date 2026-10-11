@@ -97,60 +97,86 @@ namespace {
 
     class Builder {
     public:
-        Builder(Reader reader, void* context, Error& error, bool allowRemoval)
-            : reader_(reader), context_(context), error_(error)
+        Builder(Reader reader, void* context, bool allowRemoval)
+            : reader_(reader), context_(context)
         {
             plan.allowRemoval = allowRemoval;
         }
 
         Plan plan;
 
+        // Loads one file (root or include) and appends its commands in place.
+        // Any failure drops ONLY this file together with whatever it had already
+        // expanded; the failure is recorded in plan.dropped and the caller (the
+        // parent file or the root loop) continues with its next line/file.
         bool Load(const std::string& request, const std::string& parent,
                   std::size_t includeLine)
         {
             const std::string& location = parent.empty() ? request : parent;
             if (request.empty() || request.size() >= kMaxPath)
-                return Fail(location, includeLine, "empty or overlong include path");
+                return Drop(request, Fail(location, includeLine, "empty or overlong include path"));
             if (stack_.size() >= kMaxDepth)
-                return Fail(location, includeLine, "include depth exceeds 32: " + request);
+                return Drop(request, Fail(location, includeLine, "include depth exceeds 32: " + request));
             if (plan.files >= kMaxFiles)
-                return Fail(location, includeLine, "loaded file limit exceeded");
+                return Drop(request, Fail(location, includeLine, "loaded file limit exceeded"));
 
             Source source;
             std::string readError;
             if (!reader_(request, parent, source, readError, context_))
-                return Fail(location, includeLine, "cannot read " + request + ": " + readError);
+                return Drop(request, Fail(location, includeLine, "cannot read " + request + ": " + readError));
             if (source.path.empty() || source.path.size() >= kMaxPath)
-                return Fail(location, includeLine, "invalid resolved path: " + source.path);
+                return Drop(request, Fail(location, includeLine, "invalid resolved path: " + source.path));
             const std::string identity = NormalizePath(source.path);
             for (const auto& ancestor : stack_) {
                 if (EqualName(identity, ancestor))
-                    return Fail(location, includeLine, "include cycle: " + source.path);
+                    return Drop(source.path, Fail(location, includeLine, "include cycle: " + source.path));
             }
             if (source.text.size() > kMaxFileBytes ||
                 source.text.size() > kMaxTotalBytes - bytes_)
-                return Fail(source.path, 0, "input byte limit exceeded");
+                return Drop(source.path, Fail(source.path, 0, "input byte limit exceeded"));
+
+            // Snapshot so a failure anywhere in this file's own lines can undo
+            // everything it contributed, including already expanded children.
+            const std::size_t commands = plan.commands.size();
+            const std::size_t files = plan.files;
+            const std::size_t bytes = bytes_;
             bytes_ += source.text.size();
             ++plan.files;
             stack_.push_back(identity);
 
             // Parse recursively at the include line, not after this file's
             // body. Each Parse call owns its section state and resumes on return.
-            if (!Parse(source)) return false;
+            const bool parsed = Parse(source);
             stack_.pop_back();
+            if (!parsed) {
+                plan.commands.resize(commands);
+                plan.files = files;
+                bytes_ = bytes;
+                return Drop(source.path, false);
+            }
             return true;
         }
 
     private:
         Reader reader_;
         void* context_;
-        Error& error_;
         std::size_t bytes_ = 0;
         std::vector<std::string> stack_;
 
+        Error pending_;
+
         bool Fail(const std::string& file, std::size_t line, std::string message)
         {
-            error_ = { file, line, std::move(message) };
+            pending_ = { file, line, std::move(message), {} };
+            return false;
+        }
+
+        // Records the most recent Fail() as a dropped file. Always false.
+        bool Drop(const std::string& skipped, bool)
+        {
+            pending_.skipped = skipped;
+            plan.dropped.push_back(std::move(pending_));
+            pending_ = {};
             return false;
         }
 
@@ -220,7 +246,8 @@ namespace {
                     }
                     if (++includes > kMaxFiles)
                         return Fail(source.path, line, "include entry limit exceeded");
-                    if (!Load(std::string(value), source.path, line)) return false;
+                    // A failed include is dropped on its own; this file goes on.
+                    Load(std::string(value), source.path, line);
                 } else {
                     Command command;
                     command.section = section;
@@ -321,10 +348,8 @@ bool BuildPlan(const std::vector<std::string>& roots, Reader reader,
         error.message = "invalid reader or too many root files";
         return false;
     }
-    Builder builder(reader, context, error, allowRemoval);
-    for (const auto& root : roots) {
-        if (!builder.Load(root, {}, 0)) return false;
-    }
+    Builder builder(reader, context, allowRemoval);
+    for (const auto& root : roots) builder.Load(root, {}, 0); // Failures are per file.
     output = std::move(builder.plan);
     return true;
 }

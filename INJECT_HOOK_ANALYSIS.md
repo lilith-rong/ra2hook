@@ -3,7 +3,7 @@
 记录日期：2026-08-11
 
 历史分析/待测措辞按原记录保留；后续 rules/art 实机结果见 `INJECT_INI.md`。
-当前目录和时序已更新为统一有序补丁：按行交错执行、include 原地展开，整目标预校验。
+当前目录和时序已更新为统一有序补丁：按行交错执行、include 原地展开，逐文件校验（无效文件单独丢弃）。
 本轮未本地编译或运行测试，CI/实机待验证；Clear 的静态语义不代替新流程游戏测试。
 
 本文记录 rules 注入点从 `0x679A15` 后移到 `0x679A1B` 的分析依据、预期时序和实机测试方法，并补充各个 INI 目标与 Ares/Phobos 的兼容边界。
@@ -84,7 +84,7 @@ ra2hook 在 0x679A1B 依次处理 rules/ra2md/art
         |
         v
 每目标全部根文件/include 预校验，成功后逐行执行 set/append/remove
-（include 原地展开；后出现者优先；预校验失败该目标零修改）
+（include 原地展开；后出现者优先；校验失败只丢弃对应文件）
         |
         v
 RegisterInjectedTypes -> ReloadInjectedGlobalRules
@@ -248,7 +248,7 @@ INI 合并成功，不能证明类型已经注册。
 - 扫描 `inject/<target>/*.ini`，目录决定目标，文件名不区分大小写排序。
 - 每文件逐行解析 set/append/remove，include 在该行深度优先展开，然后继续父文件；后出现的操作优先。
 - 片段应放在入口目录外或 MIX 中，避免同时被扫描与引用。重复 include 不去重，追加项也会重复执行。
-- 子路径先相对当前文件、再游戏目录/引擎/MIX。MIX 在首次目标注入前注册。每目标全部根/include 完整预校验，缺失、语法、循环或资源错误导致该目标零修改；原生执行失败停止但不保证回滚。
+- 子路径先相对当前文件、再游戏目录/引擎/MIX。MIX 在首次目标注入前注册。每个根/include 逐文件校验，缺失、语法、循环或资源错误只丢弃该文件（连同其展开的 include）；原生执行失败停止但不保证回滚。
 - 普通 `section/key=value` 与 `+=Value` 在六目标均可用，`-=Key` 仅 rules 可用；不复制 Ares/Phobos 的 `$Inherits` 等扩展语义。
 - 普通段中的 Ares 列表追加语法 `+=TypeName` 也会被保留为独立追加项；写入真实引擎对象时转换为 ra2hook 专用的 `RA2Hook_N=TypeName`，不会像普通 `WriteString("+", ...)` 那样只留下最后一项。ra2hook 不扫描、不复用 Ares/Phobos 使用的 `var_N` 键名空间。由于列表注册早于 `0x679A1B`，handler 合并后会按原版顺序补跑发生变化的原生列表注册；`WeaponTypes` 与 `Projectiles` 没有 `RulesClass::Read_*` 包装函数，则逐项调用原生 `FindOrAllocate`。现有实机 dump 还发现 2 个社区规则把弹体追加到单数 `[Projectile]`，因此该段也作为兼容别名参与 BulletType 补注册，但不会被改名或写回 `[Projectiles]`。这解决“定义段存在但新增类型未注册”的问题，同时避免仅修改普通字段时重复重跑全部列表。
 - `RulesClass::Init/Read_File` 在 `0x679A1B` 前已经缓存的全局段中，发生变化时会主动重读：`Maximums`、`JumpjetControls`、`MultiplayerDialogSettings`、`AI`、`Powerups`、`LandCharacteristics`、`IQ`、`General`。类型列表先注册，再按原版依赖顺序重读这些段。
@@ -342,7 +342,7 @@ sound 还需单独确认：日志先出现 `inject prepare @0x52C6C4`，再出�
 
 `inject/rules/*.ini` 同时接受普通赋值、追加与 `-=Key`。指令逐行保留，include 在
 出现处展开，后续赋值可以恢复前面删除的键。全部根/include 先校验为计划，成功后才
-变更该目标；任一读取/解析失败该目标零修改，其他目标独立。空目录合法无操作。
+变更该目标；任一读取/解析失败只丢弃该文件，其余照常。空目录合法无操作。
 
 段/键不区分大小写精确匹配，缺失跳过。禁止通配符、整段和注册表成员删除，但列表
 仍允许正常赋值/追加。不注销单位，不改默认值/缓存，也不恢复旧层值。

@@ -20,7 +20,7 @@ ra2hook 是面向《红色警戒 2：尤里的复仇》`gamemd.exe` 的 32 位 S
 - DLL 能够通过 Syringe 加载并与目标游戏版本共同运行；
 - `rules`/`art` 私有 INI 注入已通过实机验证，新增类型和目标规则已在游戏内生效；
 - 历史启动覆盖支持多个 INI、私有 include 和 MIX 内 INI；当时缺失 include 可跳过，
-  **当前版本改为整目标严格预校验，缺失文件会拒绝该目标补丁**；
+  当前版本逐文件校验，缺失或无效的 ini 只跳过该文件，其余照常注入；
 - 单机运行时系统、目录监视、事务式应用、回滚、命名管道和 WPF UI 已完成；
 - UI 支持新建、编辑、保存、重命名、启用/停用和删除运行时补丁；
 - INI、CSF、VXL、HVA、SHP 导出功能已实现。
@@ -94,8 +94,8 @@ Prerequisite=GAWEAP
 最终 `Prerequisite=GAWEAP`，另外两个属性缺失。`+=`、`-=` 是独立指令，不能作为
 普通同名 INI 键压缩；普通 `属性=值` 保留既有赋值语义。
 
-每个目标的所有根文件和 include 必须完整读取、校验成功，才开始任何写入/追加/删除。
-预校验失败该目标零修改，其他目标独立处理；原生执行失败会停止，但不承诺回滚。
+所有根文件和 include 先逐个读取、校验，再开始写入/追加/删除。缺失或校验失败的 ini
+只丢弃该文件（连同它展开的 include），其余照常注入；原生执行失败会停止，但不承诺回滚。
 删除精确匹配、不存在跳过，禁止通配符、整段删除和注册表删除；注册表仍可赋值/追加。
 
 remove 不写 `no`/空值，不恢复旧覆盖层值，也不修改默认值或已缓存的 TypeClass 字段。
@@ -312,7 +312,7 @@ CI 验证编译、自动测试和打包，无法代替真实游戏、Ares、Phob
 | 完全没有日志 | DLL 是否与 `gamemd.exe` 同级；Syringe 是否加载 DLL |
 | 找不到配置 | 使用 `<game>\ra2hook\ra2hook.ini`；查看日志中的 `Config: 已加载` |
 | 没有 inject 日志 | `[Inject] Enabled=yes`；是否迁移到 `inject/<target>` |
-| include 文件缺失 | 检查相对路径、MIX 和文件名；整目标预校验失败，零修改 |
+| include 文件缺失 | 检查相对路径、MIX 和文件名；日志 `patch: skipped` 列出跳过的文件和尝试路径 |
 | 删除后属性又出现 | 后续行/include/根文件可能重新赋值；以最后出现的操作为准 |
 | 补丁未执行 | 查看 `patch: rejected entire target` 的文件名、行号和错误 |
 | INI 已合并但新增单位不存在 | 检查类型列表、`missing` 日志、生产条件和科技条件 |
@@ -349,7 +349,7 @@ CI 验证编译、自动测试和打包，无法代替真实游戏、Ares、Phob
 src/
 |-- Hooks.RulesInject.cpp  启动阶段多目标注入与类型补注册
 |-- IniOverlay.cpp         Runtime 既有 INI/include 解析及共享扫描/复制工具
-|-- IniPatch.cpp           启动逐行有序指令计划、原地 include、整目标校验
+|-- IniPatch.cpp           启动逐行有序指令计划、原地 include、逐文件校验
 |-- StartupPatch.cpp       启动文件读取、有序赋值/追加和原生精确删键
 |-- Hooks.Runtime.cpp      游戏主线程 Tick Hook
 |-- Runtime.cpp            安全分类、应用、基线和回滚
